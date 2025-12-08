@@ -1,4 +1,3 @@
-
 # MANUALE OPERATIVO INTEGRALE: SEMEVAL 2026 TASK 8 (MTRAGEval) - Open Source Edition
 
 Versione: 2.1 (Llama-3.1 T4 Optimized)
