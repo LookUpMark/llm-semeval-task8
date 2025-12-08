@@ -14,8 +14,9 @@ import uuid
 from typing import List
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from qdrant_client import QdrantClient
 
 # CONFIGURATION
 # BGE-M3 is SOTA for dense retrieval and works well on modest CPU/GPU.
@@ -38,18 +39,18 @@ def load_and_chunk_data(json_path: str) -> List[Document]:
     raise NotImplementedError("load_and_chunk_data: Implement data loading and parent-child chunking logic")
 
 
-def build_vector_store(docs: List[Document], persist_dir: str = "./chroma_db") -> Chroma:
+def build_vector_store(docs: List[Document], persist_dir: str = "./qdrant_db") -> QdrantVectorStore:
     """
-    Create and persist the Chroma vector database.
+    Create and persist the Qdrant vector database.
     
     Args:
         docs: List of Documents to index.
-        persist_dir: Directory where Chroma DB will be persisted.
+        persist_dir: Directory where Qdrant DB will be persisted.
         
     Returns:
-        Chroma vectorstore instance.
+        QdrantVectorStore instance.
         
     Raises:
         NotImplementedError: Function not yet implemented.
     """
-    raise NotImplementedError("build_vector_store: Implement Chroma vector store creation and persistence")
+    raise NotImplementedError("build_vector_store: Implement Qdrant vector store creation and persistence")

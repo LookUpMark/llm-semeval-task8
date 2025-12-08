@@ -9,7 +9,8 @@ Uses BGE-M3 for embeddings and BGE-Reranker-v2-M3 for reranking.
 """
 
 from typing import List, Any
-from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
