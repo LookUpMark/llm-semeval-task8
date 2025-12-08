@@ -64,7 +64,8 @@ scipy
 huggingface_hub
 
 # Vector Store e Embeddings
-chromadb==0.4.24
+qdrant-client>=1.9.0
+langchain-qdrant>=0.1.0
 sentence-transformers==2.5.1
 rank_bm25==0.2.2
 faiss-cpu==1.8.0
@@ -95,7 +96,7 @@ Organize the folders exactly like this:
 │
 ├── /data                    # mtRAG JSON files
 ├── /dataset                 # Additional dataset files
-├── /chromadb                # Vector Store persisted data
+├── /qdrant_db               # Vector Store persisted data
 ├── /src                     # Core Python modules
 │   ├── __init__.py          # Package exports
 │   ├── state.py             # GraphState definition (Member 1)
@@ -125,7 +126,7 @@ For testing on Kaggle, use the notebooks in `/notebooks`:
 
 | Notebook | Purpose |
 |----------|---------|
-| `01_data_ingestion.ipynb` | Load mtRAG data, apply Parent-Child chunking, build Chroma vector store |
+| `01_data_ingestion.ipynb` | Load mtRAG data, apply Parent-Child chunking, build Qdrant vector store |
 | `02_rag_pipeline.ipynb` | Initialize Llama 3.1 4-bit, test Self-CRAG workflow, run multi-turn conversations |
 | `03_evaluation.ipynb` | Run RAGAS evaluation with local Llama judge, analyze IDK accuracy |
 
@@ -227,7 +228,8 @@ import uuid
 from typing import List
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # CONFIGURAZIONE
@@ -287,9 +289,9 @@ def load_and_chunk_data(json_path: str):
     print(f"Creati {len(docs_to_index)} child chunks pronti per l'indicizzazione.")
     return docs_to_index
 
-def build_vector_store(docs: List[Document], persist_dir: str = "./chroma_db"):
+def build_vector_store(docs: List[Document], persist_dir: str = "./qdrant_db"):
     """
-    Crea e salva il database vettoriale Chroma.
+    Crea e salva il database vettoriale Qdrant.
     """
     print("--- BUILDING VECTOR STORE ---")
     # model_kwargs={'device': 'cuda'} forza l'uso della GPU per creare gli embeddings
@@ -298,13 +300,15 @@ def build_vector_store(docs: List[Document], persist_dir: str = "./chroma_db"):
         model_kwargs={'device': 'cuda'} 
     )
     
-    vectorstore = Chroma.from_documents(
+    # Create Qdrant client with local persistence
+    client = QdrantClient(path=persist_dir)
+    
+    vectorstore = QdrantVectorStore.from_documents(
         documents=docs,
         embedding=embedding_model,
         collection_name="mtrag_collection",
-        persist_directory=persist_dir
+        client=client
     )
-    vectorstore.persist()
     print("--- VECTOR STORE BUILT AND SAVED ---")
     return vectorstore
 
@@ -339,7 +343,8 @@ Usiamo una strategia a due stadi:
 Python
 
 ```
-from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
@@ -358,10 +363,12 @@ def get_retriever():
         model_name=EMBEDDING_MODEL_NAME,
         model_kwargs={'device': 'cuda'}
     )
-    vectorstore = Chroma(
-        persist_directory="./chroma_db",
+    
+    client = QdrantClient(path="./qdrant_db")
+    vectorstore = QdrantVectorStore(
+        client=client,
         collection_name="mtrag_collection",
-        embedding_function=embedding_model
+        embedding=embedding_model
     )
     
     # 2. Base Retriever: Recupera molti documenti (Recall)

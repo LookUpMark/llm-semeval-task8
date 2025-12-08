@@ -84,11 +84,9 @@ models/
 # ===========================
 # Vector Store / Database
 # ===========================
-# ChromaDB persisted data (keep structure, ignore content)
-chromadb/*.sqlite3
-chromadb/chroma.sqlite3
-chromadb/index/
-chroma_db/
+# Qdrant persisted data
+qdrant_db/
+qdrant_storage/
 
 # ===========================
 # Data Files
