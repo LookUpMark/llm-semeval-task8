@@ -1,0 +1,47 @@
+# ===========================
+# Orchestration & Graph
+# ===========================
+langchain==0.1.10
+langchain-community==0.0.25
+langchain-core==0.1.28
+langchain-huggingface==0.0.3
+langgraph==0.0.26
+
+# ===========================
+# Local LLM & Quantization
+# ===========================
+torch
+transformers
+accelerate
+bitsandbytes
+scipy
+huggingface_hub
+
+# ===========================
+# Vector Store & Embeddings
+# ===========================
+chromadb==0.4.24
+sentence-transformers==2.5.1
+rank_bm25==0.2.2
+faiss-cpu==1.8.0
+
+# ===========================
+# Data Processing
+# ===========================
+unstructured==0.12.5
+tiktoken==0.6.0
+pydantic==2.6.3
+numpy==1.26.4
+pandas==2.2.1
+
+# ===========================
+# Evaluation
+# ===========================
+ragas==0.1.4
+datasets==2.18.0
+
+# ===========================
+# Utilities
+# ===========================
+python-dotenv==1.0.1
+tqdm==4.66.2
