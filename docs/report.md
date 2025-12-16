@@ -11,8 +11,8 @@ L'analisi del dataset mtRAG evidenzia che i sistemi tradizionali falliscono nel 
 
 ### 1.2 Risoluzione delle Incongruenze
 Rispetto ai draft iniziali, il progetto si allinea ai vincoli operativi reali:
-* **Hardware:** L'architettura deve girare su GPU T4. Questo impone l'uso di `bitsandbytes` per la quantizzazione a 4-bit (NF4) dei modelli LLM, scartando l'uso di modelli FP16 completi.
-* **Dipendenze:** Viene eliminata la dipendenza da API esterne per la valutazione o il retrieval. Tutto lo stack, inclusi gli embeddings (`sentence-transformers`) e il giudice per la valutazione (`ragas` con LLM locale), deve essere autosufficiente.
+* **Hardware (Il Vincolo T4):** L'architettura deve girare su GPU T4 (architettura Turing, 16GB VRAM teorici, ~15GB utilizzabili). Questo impone un vincolo ferreo. Un modello Llama 3 8B in FP16 occupa circa 16GB solo di pesi, saturando la memoria senza lasciare spazio per il contesto (KV Cache) o gli attivazioni. L'unica via è `bitsandbytes` NF4 (Normal Float 4), che riduce il modello a ~5-6GB, lasciando ~10GB per il contesto lungo del RAG.
+* **Dipendenze (L'approccio Sovereign):** Viene eliminata la dipendenza da API esterne. Questo non è solo per risparmiare costi, ma per garantire la *riproducibilità* scientifica e la privacy dei dati. Un giudice basato su GPT-4 cambia nel tempo (OpenAI aggiorna i modelli); un giudice Llama 3 locale è congelato e garantisce che i benchmark di oggi siano validi anche tra sei mesi. Tutto lo stack è "air-gapped" friendly.
 
 ### 1.3 Visione Architetturale di Alto Livello
 La soluzione proposta è un **Grafo di Stato (State Graph)** gestito da LangGraph. Il flusso non è lineare ma ciclico:
@@ -35,6 +35,10 @@ Per risolvere il problema della perdita di contesto nei chunk piccoli, adotterem
 2.  **Child Chunk:** Blocchi piccoli (400 caratteri) ottimizzati per la ricerca vettoriale.
 3.  **Indicizzazione:** Si indicizza il *Child*, ma si salva il contenuto del *Parent* nei metadati (`c_chunk.metadata["parent_content"]`). Al momento del retrieval, l'LLM riceve il contenuto padre.
 
+**Rationale del Parent-Child:**
+Il problema fondamentale del RAG su documenti complessi è il "Context Fragmentation". Se l'utente chiede "Quali sono le eccezioni all'articolo 5?", un chunk da 500 caratteri potrebbe contenere "L'eccezione è se il soggetto è minorenne", ma *senza* contenere il testo "Articolo 5" che era nel paragrafo precedente. Il sistema vettoriale non troverebbe mai quel chunk perché manca la keyword "Articolo 5".
+Con il Parent-Child, il chunk piccolo "puzza" semanticamente del contesto genitore grazie all'overlap e alla vicinanza, permettendo il recupero, ma l'LLM vede il blocco grande che contiene *sia* "Articolo 5" *sia* l'eccezione, permettendogli di collegare i punti.
+
 ### 2.3 Gestione delle Domande "Non Rispondibili" (IDK)
 Il sistema è istruito per essere rigoroso. Il prompt del generatore include delimitatori speciali e l'istruzione: *Se il contesto non contiene le informazioni esatte, RISPONDI SOLO: "I_DONT_KNOW"*. Non sono previste soglie statistiche complesse, ma un controllo semantico diretto guidato dal prompt engineering su Llama 3.1.
 
@@ -56,8 +60,11 @@ Lo stato, definito in `src/state.py`, utilizza `TypedDict` e include:
 * **Nodo 2: Retrieval.** Interroga **Qdrant** (`mtrag_collection`) usando embeddings BGE-M3 su GPU.
 * **Nodo 3: Grade Documents.** Un validatore basato su LLM analizza ogni documento recuperato. Utilizza un parser JSON manuale (`JsonOutputParser`) con gestione degli errori `try-except` per robustezza contro i fallimenti di formato dei modelli locali.
 * **Nodo 4: Generate.** Utilizza **Llama 3.1 8B Instruct (4-bit)**. Il prompt forza l'uso esclusivo del contesto recuperato.
-* **Nodo 5: Hallucination Check.** Confronta la generazione con i documenti. Se rileva fatti non supportati, imposta `is_hallucination: "yes"`.
-* **Nodo Fallback.** Se i documenti non sono rilevanti o l'allucinazione persiste, il nodo restituisce staticamente "I_DONT_KNOW" e pulisce la lista messaggi per evitare inquinamento del contesto.
+* **Nodo 5: Hallucination Check.** Confronta la generazione con i documenti. Se rileva fatti non supportati, imposta `is_hallucination: "yes"`. 
+* **Nodo Fallback.** Se i documenti non sono rilevanti o l'allucinazione persiste, il nodo restituisce staticamente "I_DONT_KNOW". 
+
+**Perché un nodo Fallback esplicito?** 
+Molti sistemi RAG lasciano che sia l'LLM a decidere di dire "non lo so". Ma gli LLM Instruction-Tuned hanno un bias verso l'essere *utili*, quindi spesso provano a indovinare. Forzando un nodo strutturale nel grafo che sovrascrive l'output con una stringa hardcoded ("I_DONT_KNOW"), eliminiamo l'ambiguità. Se il sistema decide di non rispondere, la risposta è garantita essere pulita.
 
 ### 3.3 Flusso del Grafo
 Il grafo implementato in `src/graph.py` prevede:
@@ -75,6 +82,10 @@ Si utilizza `BAAI/bge-m3` tramite `HuggingFaceEmbeddings`. L'esecuzione è forza
 Per raffinare il retrieval, si implementa una strategia a due stadi in `src/retrieval.py`:
 1.  **Base Retriever:** Recupera i top-20 documenti da Qdrant.
 2.  **Compressor:** Usa `BAAI/bge-reranker-v2-m3` (Cross-Encoder) per riordinare e selezionare solo i top-5 documenti più rilevanti (`top_n=5`).
+
+**Cross-Encoder vs Bi-Encoder:** la differenza chiave è l'Attenzione.
+- Un Bi-Encoder (Retrieval veloce) calcola il vettore della domanda e del documento separatamente. Non "vedono" l'uno l'altro fino al calcolo del coseno. Perde sfumature.
+- Un Cross-Encoder (Reranker) prende in input `[CLS] Domanda [SEP] Documento`. L'attenzione del Transformer può confrontare ogni parola della domanda con ogni parola del documento. È 100 volte più lento, ma capisce se "banca" si riferisce a un fiume o a un edificio in base al contesto. Usarlo solo su 20 documenti è il trucco per avere questa precisione senza pagare il costo computazionale su tutto il DB.
 
 ### 4.3 Database Vettoriale
 La scelta definitiva è **Qdrant**. Viene utilizzato `QdrantVectorStore` con persistenza locale su file (`path="./qdrant_db"`), eliminando la necessità di server containerizzati complessi per la fase di sviluppo base.
