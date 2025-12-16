@@ -28,6 +28,15 @@ Non useremo una "Chain" (catena lineare A -> B -> C), ma un Grafo di Stato (Stat
 -   **Self-RAG (Self-Reflective RAG):** Dopo aver generato la risposta, il sistema la rilegge. Se contiene fatti non presenti nei documenti, la scarta e ricomincia.
     
 
+
+### 1.3 Perché questa architettura specifica? (Rationale)
+
+Potreste chiedervi: *"Perché non usare un semplice script Python con un `if`?"* o *"Perché LangGraph e non LangChain standard?"*.
+
+1.  **Ciclicità vs Linearità:** Una Chain standard (es. `RetrievalQA`) è una linea retta: Input -> Retrieve -> Gen -> Output. Se il retrieval sbaglia, l'output è sbagliato. Punto. In un **Grafo**, possiamo creare dei *loop*: se la risposta non piace al Judge, torniamo indietro e cerchiamo ancora. Questo è l'unico modo per aumentare l'accuratezza senza cambiare modello.
+2.  **State Management:** In un dialogo multi-turn, dobbiamo portarci dietro la cronologia. LangGraph gestisce lo *Stato* in modo nativo, permettendo a ogni nodo di leggere e scrivere nella memoria condivisa senza passare argomenti giganti ovunque.
+3.  **Debuggabilità:** Ogni "Nodo" è una funzione isolata. Se il Retrieval si rompe, fissate solo `retrieve_node`. In una catena monolitica, il debug è un incubo.
+
 ----------
 
 ## 2. PREPARAZIONE DELL'AMBIENTE (Tutti i Membri)
@@ -44,8 +53,6 @@ Dettaglio Tecnico:
 
 Copiate questo contenuto in un file requirements.txt e lanciate pip install -r requirements.txt.
 
-Plaintext
-
 ```
 # Orchestrazione e Grafo
 langchain==0.1.10
@@ -61,6 +68,11 @@ accelerate
 bitsandbytes
 scipy
 huggingface_hub
+
+**Perché queste librerie specifiche?**
+-   **`bitsandbytes`**: Non è una semplice libreria di compressione. Implementa il data type **NF4 (Normal Float 4)**. A differenza della quantizzazione intera (INT4), NF4 è ottimizzato per la distribuzione dei pesi delle reti neurali (che è normalmente distribuita), preservando molta più "intelligenza" del modello a parità di bit.
+-   **`accelerate`**: Gestisce il caricamento del modello su più device. Con `device_map="auto"`, *accelerate* calcola automaticamente quali layer del modello mettere sulla GPU 0 e quali sulla GPU 1 per bilanciare la VRAM. Fondamentale per il setup 2x T4.
+-   **`scipy`**: Spesso dipendenza nascosta per algoritmi di distanza avanzati.
 
 # Vector Store e Embeddings
 qdrant-client>=1.9.0
@@ -147,9 +159,7 @@ Dobbiamo definire un oggetto dati che "viaggia" attraverso il grafo. Non possiam
 
 **Codice: `/src/state.py`**
 
-Python
-
-```
+```python
 from typing import TypedDict, List, Annotated, Any
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -157,38 +167,36 @@ from langgraph.graph.message import add_messages
 class GraphState(TypedDict):
     """
     Rappresenta lo stato del nostro grafo RAG.
-    Ogni nodo riceve questo stato in input e restituisce un dizionario
-    con le chiavi che vuole aggiornare.
     """
-    
-    # La storia della conversazione (HumanMessages + AIMessages).
-    # Annotated[list, add_messages] significa: "Quando un nodo ritorna 'messages',
-    # fai un append alla lista esistente invece di sovrascriverla".
+    # La storia della conversazione. add_messages evita di sovrascrivere.
     messages: Annotated[List[BaseMessage], add_messages]
     
-    # La domanda originale dell'utente nell'ultimo turno.
+    # La domanda originale dell'utente.
     question: str
-    
-    # La domanda "riscritta" dal sistema per essere comprensibile senza contesto.
-    # Es: "Quanto costa?" -> "Quanto costa il servizio Cloud IBM?"
+```
+
+**Nota:** `TypedDict` garantisce che sappiamo sempre quali chiavi esistono. `add_messages` è il riduttore magico di LangGraph.
+
+```python
+    # La domanda "riscritta" per essere autonoma (es. "Quanto costa?" -> "Quanto costa X?")
     standalone_question: str
     
-    # La lista dei documenti recuperati dal Vector Store.
+    # La lista dei documenti recuperati (oggetti Document)
     documents: List[Any]
     
-    # La risposta finale generata.
+    # La risposta generata dall'LLM
     generation: str
-    
-    # Flag booleani per la logica decisionale del grafo.
-    # 'documents_relevant': Se il grader dice che i documenti trovati sono utili.
+```
+
+**Nota:** `standalone_question` è fondamentale per il retrieval. Se cerchiamo solo "Quanto costa?", non troveremo nulla.
+
+```python
+    # Flag decisionali per il grafo
     documents_relevant: str  # 'yes' o 'no'
-    
-    # 'is_hallucination': Se il grader dice che la risposta è inventata.
     is_hallucination: str    # 'yes' o 'no'
     
-    # Contatore per evitare loop infiniti di correzione.
+    # Contatore per evitare loop infiniti (es. max 3 tentativi)
     retry_count: int
-
 ```
 
 **Dettaglio Tecnico:**
@@ -201,6 +209,10 @@ class GraphState(TypedDict):
     
 
 ----------
+
+### APPROFONDIMENTO: Perché `add_messages`?
+In Python, se avete un dizionario `state = {"messages": [A, B]}` e una funzione ritorna `{"messages": [C]}`, un update normale sovrascriverebbe tutto, risultando in `state = {"messages": [C]}`. Avreste perso la memoria.
+L'annotazione `Annotated[List, add_messages]` istruisce LangGraph a usare una logica di **append**: prende la lista vecchia `[A, B]` e ci attacca quella nuova `[C]`, risultando in `[A, B, C]`. Questo dettaglio implementativo è il cuore del supporto Multi-Turn.
 
 ### MEMBRO 2: DATA ENGINEER (Ingestione Intelligente)
 
@@ -219,9 +231,7 @@ Implementiamo il Parent-Child Chunking:
 
 **Codice: `/src/ingestion.py`**
 
-Python
-
-```
+```python
 import json
 import uuid
 from typing import List
@@ -258,40 +268,49 @@ def load_and_chunk_data(json_path: str):
 
     print(f"Caricati {len(raw_docs)} documenti grezzi.")
 
-    # Configurazione Splitter (Parent e Child)
-    # Parent: Chunk grandi (1200 chars) per dare contesto al LLM.
+    # 1. Parent Splitter: Chunk grandi (1200 chars) per il contesto
     parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=100)
     
-    # Child: Chunk piccoli (400 chars) per la ricerca vettoriale precisa.
+    # 2. Child Splitter: Chunk piccoli (400 chars) per la ricerca
     child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
 
     docs_to_index = []
-    
+```
+
+**Nota:** La discrepanza tra 1200 (lettura) e 400 (ricerca) è voluta. 400 caratteri sono un vettore denso e preciso. 1200 caratteri sono un paragrafo leggibile.
+
+```python
     print("--- STARTING PARENT-CHILD SPLITTING ---")
     for parent_doc in raw_docs:
+        # Creiamo prima i blocchi grandi
         parent_chunks = parent_splitter.split_documents([parent_doc])
         
         for p_chunk in parent_chunks:
             parent_id = str(uuid.uuid4())
             
+            # Spezziamo il blocco grande in pezzi piccoli
             child_chunks = child_splitter.split_documents([p_chunk])
             
             for c_chunk in child_chunks:
-                # SALVATAGGIO CONTESTO PADRE
-                # Nel metadata del Child, salviamo tutto il testo del Parent.
+                # TRUCCO: Salviamo il testo GRANDE nei metadati del piccolo
                 c_chunk.metadata["parent_content"] = p_chunk.page_content
                 c_chunk.metadata["parent_id"] = parent_id
                 c_chunk.metadata["source"] = parent_doc.metadata["source"]
                 
                 docs_to_index.append(c_chunk)
                 
-    print(f"Creati {len(docs_to_index)} child chunks pronti per l'indicizzazione.")
     return docs_to_index
+```
 
+**Nota:** La riga chiave è `c_chunk.metadata["parent_content"] = p_chunk.page_content`. Stiamo "nascondendo" la risposta completa dentro il frammento di ricerca.
+
+```python
 def build_vector_store(docs: List[Document], persist_dir: str = "./qdrant_db"):
     """
     Crea e salva il database vettoriale Qdrant.
     """
+    # ... (codice Qdrant standard)
+    
     print("--- BUILDING VECTOR STORE ---")
     # model_kwargs={'device': 'cuda'} forza l'uso della GPU per creare gli embeddings
     embedding_model = HuggingFaceEmbeddings(
@@ -322,7 +341,11 @@ def build_vector_store(docs: List[Document], persist_dir: str = "./qdrant_db"):
 -   `HuggingFaceEmbeddings`: Usa `sentence-transformers` in locale. Su Kaggle, `device='cuda'` accelera l'indicizzazione di 10x.
     
 
-----------
+**Perché Parent-Child Chunking? La metafora dell'Avvocato.**
+Immaginate un avvocato che cerca una legge.
+-   Se indicizziamo l'intero codice civile (Parent), la ricerca vettoriale si diluisce e non trova nulla.
+-   Se indicizziamo solo le singole frasi (Child), troviamo la frase "È vietato fumare", ma perdiamo il contesto ("...nelle raffinerie di petrolio").
+Il Parent-Child Chunking ci dà il meglio dei due mondi: "Troviamo la frase piccola (Child), ma all'LLM diamo la pagina intera (Parent)". Per mtRAG, dove le risposte dipendono da dettagli sottili ma richiedono contesto ampio, questa è l'unica strategia vincente.
 
 ### MEMBRO 3: RETRIEVAL SPECIALIST (Ricerca Ibrida & Reranking)
 
@@ -339,9 +362,7 @@ Usiamo una strategia a due stadi:
 
 **Codice: `/src/retrieval.py`**
 
-Python
-
-```
+```python
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -371,26 +392,35 @@ def get_retriever():
     )
     
     # 2. Base Retriever: Recupera molti documenti (Recall)
+    # Qui chiediamo 20 documenti. È una rete a strascico.
     base_retriever = vectorstore.as_retriever(search_kwargs={"k": 20})
     
     # 3. Reranker (Cross-Encoder): Filtra per precisione
-    # model_kwargs={'device': 'cuda'} è essenziale per velocità su T4
+    # Questo modello è lento ma intelligente. Legge la coppia (query, doc).
     model = HuggingFaceCrossEncoder(
         model_name=RERANKER_MODEL_NAME, 
         model_kwargs={'device': 'cuda'}
     )
-    
+```
+
+**Nota:** Usiamo `top_n=5` nel prossimo step. Da 20 candidati mediocri, estraiamo 5 gemme.
+
+```python
     # Il compressore filtra i 20 doc e tiene i migliori 5
     compressor = CrossEncoderReranker(model=model, top_n=5)
     
-    # 4. Pipeline Completa
+    # 4. Pipeline Completa: Retriever + Reranker
     compression_retriever = ContextualCompressionRetriever(
         base_compressor=compressor,
         base_retriever=base_retriever
     )
     
     return compression_retriever
+```
 
+**Metodo helper per estrarre il Parent Content:**
+
+```python
 def format_docs_for_gen(docs):
     """
     Estrae il PARENT CONTENT dai child chunks trovati.
@@ -399,15 +429,15 @@ def format_docs_for_gen(docs):
     final_context = []
     
     for doc in docs:
-        # Recupera il contenuto padre salvato nei metadati
+        # MAGIA: Non usiamo doc.page_content (piccolo), ma il parent (grande)
         parent_content = doc.metadata.get("parent_content", doc.page_content)
         
+        # Deduplicazione (se due child puntano allo stesso parent)
         if parent_content not in unique_contents:
             unique_contents.add(parent_content)
             final_context.append(parent_content)
             
     return "\n\n".join(final_context)
-
 ```
 
 **Dettaglio Tecnico:**
@@ -431,9 +461,7 @@ Inoltre, Llama 3.1 open-source non ha una funzione with_structured_output affida
 
 **Codice: `/src/generation.py`**
 
-Python
-
-```
+```python
 import torch
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
@@ -477,6 +505,15 @@ def get_llama_pipeline():
         do_sample=True,
         repetition_penalty=1.1 # Evita loop di ripetizione
     )
+
+    # Nota su Temperature = 0.01:
+    # Non usiamo 0.0 assoluto perché alcuni backend di campionamento (sampling) potrebbero comportarsi in modo anomalo
+    # o degenerare in greedy search pura che a volte si "blocca" su token ripetitivi. 
+    # 0.01 è un compromesso sicuro per avere quasi-determinismo con stabilità.
+    
+    # Nota su Repetition Penalty = 1.1:
+    # I modelli Llama (specialmente quantizzati) tendono a entrare in loop ("Il costo è 10. Il costo è 10. Il costo è 10.").
+    # Una penalità leggera (1.1 o 1.15) penalizza i token appena usati, forzando il modello a variare e proseguire il discorso.
 
     return HuggingFacePipeline(pipeline=pipe)
 
@@ -582,9 +619,7 @@ Qui assembliamo i nodi. La logica è identica, ma dobbiamo gestire le eccezioni.
 
 **Codice: `/src/graph.py`**
 
-Python
-
-```
+```python
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import AIMessage, HumanMessage
 from src.state import GraphState
@@ -709,17 +744,27 @@ def decide_to_final(state: GraphState):
 # --- COSTRUZIONE DEL GRAFO ---
 workflow = StateGraph(GraphState)
 
+# Aggiunta Nodi
 workflow.add_node("rewrite", rewrite_node)
 workflow.add_node("retrieve", retrieve_node)
 workflow.add_node("grade_docs", grade_documents_node)
 workflow.add_node("generate", generate_node)
 workflow.add_node("hallucination_check", hallucination_check_node)
 workflow.add_node("fallback", fallback_node)
+```
 
+**Flusso Lineare Iniziale:**
+
+```python
 workflow.add_edge(START, "rewrite")
 workflow.add_edge("rewrite", "retrieve")
 workflow.add_edge("retrieve", "grade_docs")
+```
 
+**Bivio Decisionale 1 (Post-Grading):**
+
+```python
+# Se i documenti sono buoni -> genera. Se no -> fallback.
 workflow.add_conditional_edges(
     "grade_docs",
     decide_to_generate,
@@ -730,7 +775,12 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("generate", "hallucination_check")
+```
 
+**Bivio Decisionale 2 (Post-Generation):**
+
+```python
+# Se la risposta è fedele -> END. Se no -> fallback.
 workflow.add_conditional_edges(
     "hallucination_check",
     decide_to_final,
@@ -743,7 +793,6 @@ workflow.add_conditional_edges(
 workflow.add_edge("fallback", END)
 
 app = workflow.compile()
-
 ```
 
 **Dettaglio Tecnico:**
@@ -753,6 +802,11 @@ app = workflow.compile()
 
 ----------
 
+### VISIONE D'INSIEME DEL GRAFO: Perché questa topologia?
+Avete notato che il grafo non è un cerchio perfetto, ma ha dei rami morti (Ending).
+1.  **Early Stopping (Relevance Check):** Se il Retrieval non trova nulla di buono (`grade_docs` -> `no`), non sprechiamo tempo a generare. Andiamo subito al Fallback. Questo risparmia secondi preziosi di GPU e riduce le allucinazioni (perché forzare l'LLM a rispondere su spazzatura genera spazzatura).
+2.  **Safety Check (Hallucination):** Anche se i documenti erano buoni, l'LLM potrebbe aver capito male. Il nodo finale controlla *la risposta*. È un "doppio controllo" costoso ma necessario per la metrica di *Faithfulness*.
+
 ### MEMBRO 5: EVALUATION ENGINEER (Il giudice)
 
 Spiegazione Concettuale:
@@ -761,9 +815,7 @@ Per valutare senza OpenAI, dobbiamo dire a Ragas di usare il nostro LLM Llama lo
 
 **Codice: `/eval/evaluate.py`**
 
-Python
-
-```
+```python
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision
 from datasets import Dataset
@@ -844,9 +896,7 @@ Un semplice loop CLI per interagire con il sistema. Poiché il caricamento del m
 
 **Codice: `main.py`**
 
-Python
-
-```
+```python
 import os
 from dotenv import load_dotenv
 from src.graph import app
@@ -898,7 +948,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 ```
 
 **Dettaglio Tecnico:**
