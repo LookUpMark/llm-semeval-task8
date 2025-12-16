@@ -607,7 +607,168 @@ hallucination_grader = hallucination_prompt | llm | parser_hallucination
 -   `device_map="auto"`: Cruciale su Kaggle. Divide i layer del modello tra le due GPU T4 automaticamente.
     
 -   **Prompting Llama 3:** Ho inserito i token speciali `<|begin_of_text|><|start_header_id|>` ecc. nel prompt. Anche se LangChain gestisce parte di questo, esplicitarlo aiuta i modelli quantizzati a seguire meglio le istruzioni e a smettere di generare al momento giusto (`<|eot_id|>`).
+
+---
+
+### CONFRONTO LLM: Llama 3.1 8B vs Qwen 2.5 14B (Ablation Study)
+
+Per validare scientificamente la scelta del modello LLM, è necessario eseguire un **confronto sistematico** tra almeno due modelli. Questo confronto sarà parte della fase di valutazione finale e permetterà di giustificare la scelta del modello nella submission.
+
+**Obiettivo del confronto:**
+Misurare l'impatto della scelta del modello LLM sulle metriche chiave del task (Faithfulness, Answer Relevancy, IDK Accuracy) mantenendo costanti tutti gli altri componenti (retriever, reranker, chunking strategy).
+
+**Modelli da confrontare:**
+
+| Aspetto | Llama 3.1 8B | Qwen 2.5 14B |
+|---------|--------------|--------------|
+| **Parametri** | 8B | 14B |
+| **VRAM (4-bit)** | ~6GB | ~9-10GB |
+| **Capacità di ragionamento** | Buona | Eccellente (migliore su task complessi) |
+| **Velocità di inferenza** | Più veloce | Più lento (~30-40% in più) |
+| **Supporto multilingua** | Ottimo | Eccellente (particolarmente forte su cinese) |
+| **JSON output** | Richiede prompt espliciti | Migliore aderenza al formato richiesto |
+
+**Ipotesi da testare:**
+1. Qwen 2.5 14B dovrebbe ottenere punteggi più alti su *Faithfulness* grazie alla maggiore capacità di ragionamento.
+2. Qwen 2.5 14B dovrebbe produrre meno errori di parsing JSON nei grader.
+3. Llama 3.1 8B dovrebbe essere significativamente più veloce (metrica: tokens/secondo).
+
+**Implementazione per il confronto: `/src/generation_qwen.py`**
+
+Creare un file separato con la configurazione Qwen per poter switchare facilmente tra i due modelli.
+
+```python
+import torch
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
+from langchain_huggingface import HuggingFacePipeline
+
+# --- CONFIGURAZIONE LLM LOCALE (QWEN 2.5 14B QUANTIZZATO) ---
+MODEL_ID = "Qwen/Qwen2.5-14B-Instruct"
+
+def get_qwen_pipeline():
+    """Configura Qwen 2.5 14B a 4-bit per GPU T4."""
     
+    # Configurazione Quantizzazione 4-bit (NF4)
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16  # Qwen performa meglio con bfloat16
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True
+    )
+
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=512,
+        temperature=0.01,
+        do_sample=True,
+        repetition_penalty=1.05  # Qwen è più stabile, serve meno penalità
+    )
+
+    return HuggingFacePipeline(pipeline=pipe)
+
+llm = get_qwen_pipeline()
+```
+
+**Nota su `bfloat16`:** Qwen 2.5 è stato addestrato con bfloat16, quindi usare questo dtype per il compute garantisce migliore qualità rispetto a float16. Le T4 supportano bfloat16 via software emulation (leggermente più lento ma funzionale).
+
+**Prompt per Qwen 2.5 (ChatML format):**
+
+Qwen 2.5 usa il formato ChatML, diverso da Llama 3. Ecco i prompt adattati:
+
+```python
+# --- QUERY REWRITER (Qwen) ---
+rewrite_system_qwen = """<|im_start|>system
+Sei un assistente AI. Analizza la CRONOLOGIA della chat e l'ULTIMA DOMANDA dell'utente.
+Se l'ultima domanda dipende dal contesto (es. "quanto costa?", "e lui?"), riscrivila in modo autonomo.
+Se è già chiara, restituiscila invariata.
+Restituisci SOLO la domanda riscritta, nient'altro.<|im_end|>"""
+
+rewrite_prompt_qwen = ChatPromptTemplate.from_messages([
+    ("system", rewrite_system_qwen),
+    ("placeholder", "{messages}"),
+    ("human", "{question}"),
+])
+
+query_rewriter = rewrite_prompt_qwen | llm | StrOutputParser()
+
+# --- GENERATOR (Qwen) ---
+gen_system_qwen = """<|im_start|>system
+Sei un assistente rigoroso per mtRAG.
+Usa ESCLUSIVAMENTE il contesto fornito per rispondere.
+Se il contesto non contiene le informazioni esatte, RISPONDI SOLO: "I_DONT_KNOW".
+Non inventare.
+
+CONTESTO:
+{context}<|im_end|>
+<|im_start|>user
+Domanda: {question}<|im_end|>
+<|im_start|>assistant"""
+
+gen_prompt_qwen = ChatPromptTemplate.from_template(gen_system_qwen)
+generator = gen_prompt_qwen | llm | StrOutputParser()
+
+# --- RELEVANCE GRADER (Qwen) ---
+grade_system_qwen = """<|im_start|>system
+Sei un valutatore. Analizza se il documento è rilevante per la domanda.
+Rispondi ESCLUSIVAMENTE con un JSON valido contenente la chiave 'binary_score' con valore 'yes' o 'no'.
+Nessun preambolo.
+
+Formato atteso: {{ "binary_score": "yes" }}<|im_end|>
+<|im_start|>user
+Domanda: {question}
+Documento: {document}<|im_end|>
+<|im_start|>assistant"""
+
+grade_prompt_qwen = ChatPromptTemplate.from_template(grade_system_qwen)
+retrieval_grader = grade_prompt_qwen | llm | parser_grade
+
+# --- HALLUCINATION GRADER (Qwen) ---
+hallucination_system_qwen = """<|im_start|>system
+Confronta la RISPOSTA con i DOCUMENTI.
+Se la risposta contiene fatti non presenti nei documenti, rispondi 'no'.
+Se è supportata, rispondi 'yes'.
+Rispondi ESCLUSIVAMENTE con un JSON: {{ "binary_score": "..." }}<|im_end|>
+<|im_start|>user
+Documenti: {documents}
+Risposta: {generation}<|im_end|>
+<|im_start|>assistant"""
+
+hallucination_prompt_qwen = ChatPromptTemplate.from_template(hallucination_system_qwen)
+hallucination_grader = hallucination_prompt_qwen | llm | parser_hallucination
+```
+
+**Protocollo di confronto:**
+
+1. **Setup:** Preparare due notebook identici, uno con `from src.generation import llm` e uno con `from src.generation_qwen import llm`.
+2. **Dataset:** Usare lo stesso subset di test (es. 100 domande multi-turn) per entrambi i modelli.
+3. **Metriche da raccogliere:**
+   - Faithfulness (RAGAS)
+   - Answer Relevancy (RAGAS)
+   - Context Precision (RAGAS)
+   - IDK Accuracy (% di risposte "I_DONT_KNOW" quando la risposta corretta è IDK)
+   - JSON Parsing Error Rate (% di fallimenti nei grader)
+   - Latenza media per query (secondi)
+   - Picco VRAM (GB)
+4. **Output:** Tabella comparativa da includere nel paper/report finale.
+
+**Risultato atteso:**
+Il modello con il miglior trade-off tra accuratezza e risorse sarà selezionato per la submission finale. Se Qwen 2.5 14B supera Llama 3.1 8B di almeno 5 punti percentuali su Faithfulness senza saturare la VRAM, sarà la scelta raccomandata.
 
 ----------
 
