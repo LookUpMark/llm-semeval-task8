@@ -53,6 +53,7 @@ if __name__ == "__main__":
     )
     print(f"Output: {res}\nExpected: 'When was Guido van Rossum born?'\n\n")
     progress_bar.update(100)
+    progress_bar.close()
 
     print("--- GENERATION TESTS COMPLETED ---")
 
