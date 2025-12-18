@@ -1,11 +1,11 @@
 # ===========================
 # Orchestration & Graph
 # ===========================
-langchain==0.1.10
-langchain-community==0.0.25
-langchain-core==0.1.28
-langchain-huggingface==0.0.3
-langgraph==0.0.26
+langchain
+langchain-community
+langchain-core
+langchain-huggingface
+langgraph
 
 # ===========================
 # Local LLM & Quantization
@@ -20,29 +20,29 @@ huggingface_hub
 # ===========================
 # Vector Store & Embeddings
 # ===========================
-qdrant-client>=1.9.0
-langchain-qdrant>=0.1.0
-sentence-transformers==2.5.1
-rank_bm25==0.2.2
-faiss-cpu==1.8.0
+qdrant-client
+langchain-qdrant
+sentence-transformers
+rank_bm25
+faiss-cpu
 
 # ===========================
 # Data Processing
 # ===========================
-unstructured==0.12.5
-tiktoken==0.6.0
-pydantic==2.6.3
-numpy==1.26.4
-pandas==2.2.1
+unstructured
+tiktoken
+pydantic
+numpy
+pandas
 
 # ===========================
 # Evaluation
 # ===========================
-ragas==0.1.4
-datasets==2.18.0
+ragas
+datasets
 
 # ===========================
 # Utilities
 # ===========================
-python-dotenv==1.0.1
-tqdm==4.66.2
+python-dotenv
+tqdm
