@@ -12,10 +12,10 @@ from typing import List, Any
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.retrievers import ContextualCompressionRetriever
+from langchain_core.documents import Document
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain.schema import Document
 
 # CONFIGURATION
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
