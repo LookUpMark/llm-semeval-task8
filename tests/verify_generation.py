@@ -1,5 +1,10 @@
-from src.generation import create_generation_components
+import sys
+import os
 from tqdm import tqdm
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.generation import create_generation_components
 
 if __name__ == "__main__":
     progress_bar = tqdm(
