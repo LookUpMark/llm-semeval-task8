@@ -132,4 +132,5 @@ secrets/
 *.bak
 *.tmp
 *.temp
-.gemini/
+
+member*.md
