@@ -11,10 +11,11 @@ Uses 4-bit quantization (NF4) via bitsandbytes for T4 GPU compatibility.
 """
 
 import torch
-from typing import Any
+from typing import Any, List, Tuple
 from dataclasses import dataclass
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
 from langchain_huggingface import HuggingFacePipeline
@@ -92,20 +93,31 @@ def get_llama_pipeline(model_id="meta-llama/Meta-Llama-3.1-8B-Instruct") -> Hugg
         trust_remote_code=True
     )
 
+    # return_full_text=False ensures we only get the generated answer,
+    # not the prompt + answer.
     pipe = pipeline(
         "text-generation",
         model=model,
         tokenizer=tokenizer,
         max_new_tokens=1024,
         do_sample=True,
-        temperature=0.3,
+        temperature=0.01, # Low temperature for more deterministic outputs
         repetition_penalty=1.1,
-        pad_token_id=tokenizer.eos_token_id
+        pad_token_id=tokenizer.eos_token_id,
+        return_full_text=False 
     )
 
     return HuggingFacePipeline(
         pipeline=pipe
     )
+
+def _format_chat_history(messages: List[Tuple[str, str]]) -> str:
+    """Helper to format chat history from list of tuples to string."""
+    formatted = []
+    for role, content in messages:
+        role_name = "User" if role.lower() in ["user", "human"] else "Assistant"
+        formatted.append(f"{role_name}: {content}")
+    return "\n".join(formatted)
 
 def _create_query_rewriter(llm) -> Any:
     """
@@ -128,15 +140,31 @@ User: "When was he born?"
 Rewrite: "When was Steve Jobs born?"
 
 If the question is already clear, return it unchanged.
-Return ONLY the rewritten question, no preamble.<|eot_id|>"""
+Return ONLY the rewritten question, no preamble.<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+Chat History:
+{messages}
 
-    rewrite_prompt = ChatPromptTemplate.from_messages([
-        ('system', rewrite_system), # system message
-        ('placeholder', '{messages}'), # {messages} will be replaced with chat history
-        ('human', '{question}') # {question} will be replaced with last question
-    ])
+Last Question: {question}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>"""
 
-    return rewrite_prompt | llm | StrOutputParser()
+    rewrite_prompt = PromptTemplate(
+        template=rewrite_system,
+        input_variables=["messages", "question"]
+    )
+
+    # Chain that formats messages before passing to prompt
+    chain = (
+        {
+            "messages": lambda x: _format_chat_history(x["messages"]),
+            "question": lambda x: x["question"]
+        }
+        | rewrite_prompt 
+        | llm 
+        | StrOutputParser()
+    )
+    
+    return chain
 
 def _create_generator(llm) -> Any:
     """
@@ -162,7 +190,10 @@ CONTEXT:
 Question: {question}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>"""
 
-    gen_prompt = ChatPromptTemplate.from_template(gen_system)
+    gen_prompt = PromptTemplate(
+        template=gen_system,
+        input_variables=["context", "question"]
+    )
 
     return gen_prompt | llm | StrOutputParser()
 
@@ -180,8 +211,7 @@ def _create_retrieval_grader(llm) -> Any:
         pydantic_object=GradeDocuments
     )
 
-    prompt = ChatPromptTemplate.from_template(
-        """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+    grade_system = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 You are a grader assessing relevance of a retrieved document to a user question.
 If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant.
 It does not need to be a stringent test. The goal is to filter out erroneous retrievals.
@@ -191,6 +221,10 @@ Respond EXCLUSIVELY with a JSON object with key "binary_score". For example: {"b
 Question: {question}
 Document: {document}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>"""
+
+    prompt = PromptTemplate(
+        template=grade_system,
+        input_variables=["question", "document"]
     )
 
     return prompt | llm | parser
@@ -209,8 +243,7 @@ def _create_hallucination_grader(llm) -> Any:
         pydantic_object=GradeHallucinations
     )
 
-    prompt = ChatPromptTemplate.from_template(
-        """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+    hallucination_system = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts.
 Give a binary score 'yes' or 'no'. 'yes' means that the answer is fully supported by the set of facts.
 'no' means that the answer contains information that is not found in the documents (hallucination).
@@ -219,17 +252,24 @@ Respond EXCLUSIVELY with a JSON object with key "binary_score". For example: {"b
 Documents: {documents}
 Answer: {generation}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>"""
+
+    prompt = PromptTemplate(
+        template=hallucination_system,
+        input_variables=["documents", "generation"]
     )
 
     return prompt | llm | parser
 
 
-def create_generation_components() -> GenerationComponents:
+def create_generation_components(model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct") -> GenerationComponents:
     """
     Factory function to create and configure all generation components.
     
     Creates the quantized LLM pipeline and initializes all chains
     for query rewriting, generation, and grading.
+
+    Args:
+        model_id: Hugging Face model ID to load. Defaults to Llama 3.1 8B Instruct.
     
     Returns:
         GenerationComponents: Dataclass containing initialized LLM and chains.
@@ -238,8 +278,8 @@ def create_generation_components() -> GenerationComponents:
         >>> components = create_generation_components()
         >>> result = components.generator.invoke({"context": "...", "question": "..."})
     """
-    print("Creating Generation Components...")
-    llm = get_llama_pipeline()
+    print(f"Creating Generation Components with model: {model_id}...")
+    llm = get_llama_pipeline(model_id=model_id)
     
     components = GenerationComponents(
         llm=llm,
