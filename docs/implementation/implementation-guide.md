@@ -43,6 +43,25 @@ Potreste chiedervi: *"Perché non usare un semplice script Python con un `if`?"*
 
 Poiché stiamo usando modelli locali pesanti, la gestione delle dipendenze è critica per non saturare la VRAM o andare in conflitto con CUDA.
 
+### 2.0 SETUP DATASET (CRITICO - PRIMO PASSO)
+
+Prima di installare qualsiasi cosa, **dovete procurarvi i dati**. Senza dati, Member 2 e Member 5 sono bloccati.
+
+**Fonte Ufficiale:** [IBM mt-rag-benchmark GitHub](https://github.com/IBM/mt-rag-benchmark/)
+
+**Procedura di Setup Manuale:**
+1.  **Download:** Scaricate il repository come ZIP o clonate `git clone https://github.com/IBM/mt-rag-benchmark.git`.
+2.  **Individuazione File (Corpora - Task A):** Nel repo scaricato, andate in `corpora/passage_level/`. Troverete 4 file zip: `clapnq.jsonl.zip`, `cloud.json.zip`, `fiqa.jsonl.zip`, `govt.jsonl.zip`.
+3.  **Individuazione File (Evaluation - Task C):** Andate in `human/generation_tasks/`. Troverete `reference+RAG.jsonl` (Target per Task C).
+4.  **Posizionamento & Unzip:**
+    *   **Per l'Ingestione (Membro 2):** Create `/data/corpus/` e spostateci dentro i file `.jsonl` estratti dagli zip (es. `govt.jsonl`).
+    *   **Per la Valutazione (Membro 5):** Copiate `human/generation_tasks/reference+RAG.jsonl` in `/dataset/reference+RAG.jsonl`.
+5.  **Verifica:** Assicuratevi che `ls data/corpus/` mostri i file JSONL.
+
+> **NOTA IMPORTANTE:** Per iniziare, consigliamo di usare solo **uno** dei domini (es. `govt.jsonl`) per evitare tempi di indicizzazione biblici sulla T4.
+
+> **NOTA:** L'assignment menziona "Task C: Generation with Retrieved Passages (RAG)" come target principale (`reference+RAG.jsonl` o simile). Assicuratevi di avere questo file per la valutazione.
+
 ### 2.1 File `requirements.txt`
 
 Spiegazione Concettuale:
@@ -69,11 +88,6 @@ bitsandbytes
 scipy
 huggingface_hub
 
-**Perché queste librerie specifiche?**
--   **`bitsandbytes`**: Non è una semplice libreria di compressione. Implementa il data type **NF4 (Normal Float 4)**. A differenza della quantizzazione intera (INT4), NF4 è ottimizzato per la distribuzione dei pesi delle reti neurali (che è normalmente distribuita), preservando molta più "intelligenza" del modello a parità di bit.
--   **`accelerate`**: Gestisce il caricamento del modello su più device. Con `device_map="auto"`, *accelerate* calcola automaticamente quali layer del modello mettere sulla GPU 0 e quali sulla GPU 1 per bilanciare la VRAM. Fondamentale per il setup 2x T4.
--   **`scipy`**: Spesso dipendenza nascosta per algoritmi di distanza avanzati.
-
 # Vector Store e Embeddings
 qdrant-client>=1.9.0
 langchain-qdrant>=0.1.0
@@ -95,8 +109,12 @@ datasets==2.18.0
 # Utility
 python-dotenv==1.0.1
 tqdm==4.66.2
-
 ```
+
+**Perché queste librerie specifiche?**
+-   **`bitsandbytes`**: Non è una semplice libreria di compressione. Implementa il data type **NF4 (Normal Float 4)**. A differenza della quantizzazione intera (INT4), NF4 è ottimizzato per la distribuzione dei pesi delle reti neurali (che è normalmente distribuita), preservando molta più "intelligenza" del modello a parità di bit.
+-   **`accelerate`**: Gestisce il caricamento del modello su più device. Con `device_map="auto"`, *accelerate* calcola automaticamente quali layer del modello mettere sulla GPU 0 e quali sulla GPU 1 per bilanciare la VRAM. Fondamentale per il setup 2x T4.
+-   **`scipy`**: Spesso dipendenza nascosta per algoritmi di distanza avanzati.
 
 ### 2.2 Repository Structure
 
@@ -248,11 +266,16 @@ EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 def load_and_chunk_data(json_path: str):
     """
     Carica il dataset mtRAG e applica Parent-Child Chunking.
+    RICHIEDE: Il file corpus JSON presente in /data.
     """
-    print(f"--- LOADING DATA FROM {json_path} ---")
+    print(f"--- LOADING DATA FROM {json_path} ---") 
+    # ESEMPIO: json_path potrebbe essere "./data/corpus.json" o simile.
     
-    with open(json_path, 'r') as f:
-        data = json.load(f)
+    try:
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"ERRORE CRITICO: Il file {json_path} non esiste. Hai seguito il passo 2.0 SETUP DATASET?")
     
     raw_docs = []
     # Adattamento alla struttura JSON di mtRAG
@@ -1032,11 +1055,54 @@ def run_evaluation(test_dataset):
     print(scores)
     return scores
 
+def load_test_data(json_path: str):
+    """
+    Carica il dataset di validazione per Task C (RAG).
+    RICHIEDE: Il file presente in /dataset/val_data.json
+    """
+    import json
+    
+    # ESEMPIO: Adattare alla struttura reale del file JSON
+    # ESEMPIO: Adattare alla struttura reale del file JSON
+    # mtRAG usa JSONL (JSON Lines). Ogni riga è un task.
+    # Struttura attesa da 'reference+RAG.jsonl':
+    # { "turn_id": "...", "messages": [...], "reference_passages": [...] }
+    
+    test_data = []
+    with open(json_path, 'r') as f:
+        for line in f:
+            item = json.loads(line)
+            
+            # Estraiamo l'ultima domanda (user) e la risposta attesa (se presente)
+            # O più semplicemente, per il Task C, usiamo le conversazioni fornite.
+            # Qui semplifichiamo estraendo l'ultimo messaggio user come query.
+            if "messages" in item:
+                messages = item["messages"]
+                last_user_msg = next((m for m in reversed(messages) if m['role'] == 'user'), None)
+                last_agent_msg = next((m for m in reversed(messages) if m['role'] == 'assistant'), None) # O ground truth separata
+                
+                if last_user_msg:
+                    test_data.append({
+                        "question": last_user_msg['content'],
+                        # In reference+RAG.jsonl la GT spesso è nel campo 'response' o va inferita.
+                        # Per ora usiamo un placeholder o l'ultimo agent msg se presente nel dataset di training.
+                        "ground_truth": last_agent_msg['content'] if last_agent_msg else "N/A"
+                    })
+        
+    print(f"Caricati {len(test_data)} campioni di test.")
+    return test_data
+
 if __name__ == "__main__":
+    # PUNTO DI ATTENZIONE:
+    # Per il test rapido usate la lista dummy.
+    # Per la valutazione reale, scommentate load_test_data e puntate al file scaricato al passo 2.0.
+    
+    # test_data = load_test_data("./dataset/reference+RAG.jsonl") 
     test_data = [
         {"question": "Chi è il CEO di Apple?", "ground_truth": "Tim Cook"}
     ]
     run_evaluation(test_data)
+
 
 ```
 
