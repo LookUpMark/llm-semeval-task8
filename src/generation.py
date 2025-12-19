@@ -130,14 +130,29 @@ def _create_query_rewriter(llm) -> Any:
         LangChain chain for query rewriting.
     """
     rewrite_system = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are an AI assistant specialized in rewriting. 
+You are an AI assistant specialized in rewriting to resolve coreferences.
 Analyze the CHAT HISTORY and the LAST QUESTION.
-Your task is to rewrite the last question so that it is understandable WITHOUT the history.
+Your task is to rewrite the LAST QUESTION so that it is understandable WITHOUT the history.
 
-Examples:
-Chat: "Who is Steve Jobs?" -> "Apple Founder."
-User: "When was he born?"
-Rewrite: "When was Steve Jobs born?"
+### EXAMPLES
+Chat History:
+User: Who is the CEO of Apple?
+Assistant: Tim Cook.
+Last Question: How old is he?
+Rewrite: How old is Tim Cook?
+
+Chat History:
+User: Tell me about Paris.
+Assistant: It's the capital of France.
+Last Question: What is the population of New York?
+Rewrite: What is the population of New York?
+
+Chat History:
+User: Using the given context, explain the main idea.
+Assistant: The context discusses quantum mechanics.
+Last Question: Summarize it.
+Rewrite: Summarize the main idea of quantum mechanics.
+### END EXAMPLES
 
 If the question is already clear, return it unchanged.
 Return ONLY the rewritten question, no preamble.<|eot_id|>
@@ -177,8 +192,22 @@ def _create_generator(llm) -> Any:
         LangChain chain for generation.
     """
     gen_system = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a strict assistant for the mtRAG task.
+You are a strict assistant for a RAG task.
 Answer the user's question using EXCLUSIVELY the context provided below.
+
+### EXAMPLES
+Context: The sky is blue. The grass is green.
+Question: What color is the sky?
+Answer: The sky is blue.
+
+Context: The capital of Italy is Rome. The Colosseum is in Rome.
+Question: Who is the President of France?
+Answer: I_DONT_KNOW
+
+Context: Photosynthesis is the process used by plants to convert light into energy.
+Question: How do plants get energy?
+Answer: Plants get energy through a process called photosynthesis, which converts light into energy.
+### END EXAMPLES
 
 GOLDEN RULE:
 If the context does not contain the necessary information to answer, YOU MUST answer with: "I_DONT_KNOW".
@@ -215,8 +244,27 @@ def _create_retrieval_grader(llm) -> Any:
 You are a grader assessing relevance of a retrieved document to a user question.
 If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant.
 It does not need to be a stringent test. The goal is to filter out erroneous retrievals.
+
+### EXAMPLES
+Question: What is the capital of France?
+Document: Paris is the capital city of France.
+Output: {{"binary_score": "yes"}}
+
+Question: How do I make pasta?
+Document: The history of pasta starts in Italy.
+Output: {{"binary_score": "yes"}}
+
+Question: Who won the 2018 World Cup?
+Document: The 2018 World Cup was hosted in Russia.
+Output: {{"binary_score": "no"}}
+
+Question: What is the weather in London?
+Document: Apple Inc. released a new iPhone.
+Output: {{"binary_score": "no"}}
+### END EXAMPLES
+
 Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.
-Respond EXCLUSIVELY with a JSON object with key "binary_score". For example: {"binary_score": "yes"} or {"binary_score": "no"}.<|eot_id|>
+Respond EXCLUSIVELY with a JSON object with key "binary_score".<|eot_id|>
 <|start_header_id|>user<|end_header_id|>
 Question: {question}
 Document: {document}<|eot_id|>
@@ -247,7 +295,22 @@ def _create_hallucination_grader(llm) -> Any:
 You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts.
 Give a binary score 'yes' or 'no'. 'yes' means that the answer is fully supported by the set of facts.
 'no' means that the answer contains information that is not found in the documents (hallucination).
-Respond EXCLUSIVELY with a JSON object with key "binary_score". For example: {"binary_score": "yes"} or {"binary_score": "no"}.<|eot_id|>
+
+### EXAMPLES
+Documents: Apple was founded in 1976 by Steve Jobs, Steve Wozniak, and Ronald Wayne.
+Answer: Apple was founded in 1976.
+Output: {{"binary_score": "yes"}}
+
+Documents: Apple was founded in 1976.
+Answer: Apple was founded in 1976 by Tim Cook.
+Output: {{"binary_score": "no"}}
+
+Documents: The sky is blue due to Rayleigh scattering.
+Answer: The sky is blue.
+Output: {{"binary_score": "yes"}}
+### END EXAMPLES
+
+Respond EXCLUSIVELY with a JSON object with key "binary_score".<|eot_id|>
 <|start_header_id|>user<|end_header_id|>
 Documents: {documents}
 Answer: {generation}<|eot_id|>
