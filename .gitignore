@@ -133,3 +133,6 @@ secrets/
 *.tmp
 *.temp
 .gemini/
+
+docs/assignment
+member4*.md
