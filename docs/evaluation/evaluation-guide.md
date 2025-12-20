@@ -73,12 +73,16 @@ Per i **Task B e C (Generation)**, la valutazione è più complessa perché non 
 
 A partire dal 10 Gennaio 2026, la procedura cambierà leggermente per la gara ufficiale. In quella data, gli organizzatori rilasceranno il **Test Set Ufficiale**. Questo file conterrà solo le domande, senza le risposte o i documenti di riferimento.
 
+<<<<<<< HEAD
 Il workflow sarà:
 1. Scaricare il nuovo file.
 2. Aggiornare la variabile `INPUT_FILE` nel notebook `All_Tasks_Pipeline.ipynb` per puntare a questo nuovo file.
 3. Eseguire la pipeline *senza* guardare i risultati (perché non avrai la ground truth).
 4. Validare con il `format_checker.py`.
 5. Caricare i file sulla piattaforma ufficiale.
+=======
+Il workflow sarà: scaricare il nuovo file, aggiornare la variabile `INPUT_FILE` nel notebook `All_Tasks_Pipeline.ipynb` per puntare ad esso, eseguire la pipeline senza guardare i risultati (perché non avrai la ground truth), validare con il `format_checker.py`, e caricare i file sulla piattaforma ufficiale.
+>>>>>>> main
 
 Ricorda il principio fondamentale del Machine Learning: non modificare mai il sistema basandoti sui risultati del Test Set (overfitting). La valutazione finale avverrà su dati mai visti prima, quindi un sistema robusto e generalizzabile vincerà su uno iper-ottimizzato per il training set.
 
@@ -89,9 +93,13 @@ Ricorda il principio fondamentale del Machine Learning: non modificare mai il si
 Per comprendere a fondo il funzionamento del sistema e poterlo migliorare, dobbiamo aprire il cofano e analizzare i tre componenti principali: la strategia di Retrieval, la natura della Knowledge Base e il processo Generativo.
 
 ### 1. Il Modulo Retrieval (`src/retrieval.py`): Come troviamo l'ago nel pagliaio
+<<<<<<< HEAD
 Questo modulo è il cuore pulsante della pipeline RAG. Il processo non è una semplice ricerca per parole chiave (come Ctrl+F), ma una ricerca semantica avanzata.
 Innanzitutto, la domanda dell'utente viene trasformata in un vettore numerico multi-dimensionale (embedding) tramite il modello **`BAAI/bge-m3`**. Questo permette di cercare per significato, non solo per keyword esatte.
 Successivamente, Qdrant (il database vettoriale) trova i documenti più simili. Per raffinare questa lista grezza, utilizziamo un modello Cross-Encoder molto preciso, il **`BAAI/bge-reranker-v2-m3`**, che riordina i risultati assegnando un punteggio di qualità. Solo i top-5 passano al generatore.
+=======
+Questo modulo è il cuore pulsante della pipeline RAG. Il processo non è una semplice ricerca per parole chiave (come Ctrl+F), ma una ricerca semantica avanzata. Innanzitutto, la domanda dell'utente viene trasformata in un vettore numerico multi-dimensionale (embedding) tramite il modello **`BAAI/bge-m3`**. Questo permette di cercare per significato, non solo per keyword esatte. Successivamente, Qdrant (il database vettoriale) trova i documenti più simili. Per raffinare questa lista grezza, utilizziamo un modello Cross-Encoder molto preciso, il **`BAAI/bge-reranker-v2-m3`**, che riordina i risultati assegnando un punteggio di qualità. Solo i top-5 passano al generatore.
+>>>>>>> main
 
 ### 2. I Documenti Recuperabili (`dataset/corpora`): I limiti della conoscenza
 Il sistema opera su una Knowledge Base chiusa, limitata ai documenti presenti in `dataset/corpora`. Non c'è accesso a Internet. La libreria digitale copre quattro domini: **CLAPNQ** (cultura generale), **FiQA** (finanza), **Govt** (legale) e **Cloud** (tecnico).
@@ -101,6 +109,7 @@ La valutazione per i Task B e C (Generazione) si affida a un LLM Giudice che val
 
 ---
 
+<<<<<<< HEAD
 ## Architettura LangGraph Pipeline: Flusso Decisionale e Gestione dei Casi Limite 🧠
 
 Un sistema RAG avanzato non è una sequenza lineare di istruzioni. Va immaginato come un agente intelligente capace di prendere decisioni, valutare il proprio operato e correggere la rotta se necessario. Questa logica complessa è orchestrata da **LangGraph**, che gestisce il flusso attraverso nodi funzionali e ramificazioni decisionali. Di seguito descriviamo narrativamente il percorso di una richiesta utente, specificando i modelli utilizzati.
@@ -114,6 +123,23 @@ I documenti recuperati vengono poi esaminati dal **`grade_documents_node`**, un 
 Se invece i documenti superano il filtro, il **`generate_node`** entra in azione. Sempre guidato da **`meta-llama/Llama-3.1-8B-Instruct`**, questo nodo compone la risposta finale utilizzando esclusivamente le informazioni verificate.
 
 L'ultimo baluardo prima dell'utente è il **`hallucination_check_node`** (Self-RAG). Qui, un'altra istanza di **`meta-llama/Llama-3.1-8B-Instruct`** agisce come un fact-checker paranoico, confrontando ogni frase generata con i documenti di supporto. Se rileva un'allucinazione (un'informazione non supportata dal testo), blocca la risposta e attiva il fallback. Solo le risposte verificate e fedeli raggiungono l'utente finale.
+=======
+## Architettura LangGraph Pipeline: Flusso Decisionale con Retry Loop 🧠
+
+Un sistema RAG avanzato non è una sequenza lineare di istruzioni. Va immaginato come un agente intelligente capace di prendere decisioni, valutare il proprio operato e correggere la rotta se necessario. Questa logica complessa è orchestrata da **LangGraph**, che gestisce il flusso attraverso nodi funzionali e ramificazioni decisionali.
+
+La caratteristica distintiva del nostro sistema è il **Retry Loop**: quando viene rilevata un'allucinazione, invece di arrendersi immediatamente, il sistema ritenta la generazione fino a un massimo di `MAX_RETRIES` volte (default: 2, quindi fino a 3 tentativi totali). Questo massimizza la qualità delle risposte anche con modelli più piccoli come Llama 3.1 8B.
+
+Il viaggio inizia nel nodo **`rewrite_node`**, che agisce come un traduttore intelligente. Spesso gli utenti formulano domande ambigue o dipendenti dal contesto (es. "Chi è lui?"). Qui utilizziamo il modello **`meta-llama/Llama-3.1-8B-Instruct`** per riscrivere la query rendendola autonoma ed esplicita (es. "Chi è Elon Musk?"). Se la domanda è già chiara, il modello la lascia invariata.
+
+L'output passa al **`retrieve_node`**, il bibliotecario del sistema. Utilizzando il modello di embedding **`BAAI/bge-m3`** e il reranker **`BAAI/bge-reranker-v2-m3`**, questo nodo interroga il database Qdrant per recuperare i documenti più pertinenti. In questa fase, il contatore `retry_count` viene azzerato a 0.
+
+I documenti recuperati vengono poi esaminati dal **`grade_documents_node`**, un filtro di qualità critico. Anche qui ci affidiamo a **`meta-llama/Llama-3.1-8B-Instruct`**, che legge ogni documento e decide se contiene informazioni utili. Se tutti i documenti vengono scartati come irrilevanti, il grafo devia direttamente verso il fallback.
+
+Se invece i documenti superano il filtro, il **`generate_node`** entra in azione. Sempre guidato da **`meta-llama/Llama-3.1-8B-Instruct`**, questo nodo compone la risposta finale utilizzando esclusivamente le informazioni verificate.
+
+L'ultimo baluardo prima dell'utente è il **`hallucination_check_node`** (Self-RAG). Qui, un'altra istanza di **`meta-llama/Llama-3.1-8B-Instruct`** agisce come un fact-checker paranoico. Se rileva un'allucinazione, il sistema non si arrende subito: controlla prima il contatore `retry_count`. Se `retry_count < MAX_RETRIES`, il flusso passa a **`increment_retry_node`** che incrementa il contatore e ritorna a **`generate_node`** per un nuovo tentativo. Se invece `retry_count >= MAX_RETRIES`, il sistema ha esaurito i tentativi e attiva il **`fallback_node`** restituendo "I_DONT_KNOW". Solo le risposte verificate e fedeli raggiungono l'utente finale.
+>>>>>>> main
 
 ### Riassunto Flusso Visivo
 ```mermaid
@@ -121,9 +147,24 @@ graph TD
     Start --> Rewrite
     Rewrite --> Retrieve
     Retrieve --> GradeDocs
+<<<<<<< HEAD
     GradeDocs -- Documenti OK? --> Generate
     GradeDocs -- Nessun Doc? --> Fallback
     Generate --> HallucinationCheck
     HallucinationCheck -- Allucinazione? --> Fallback
     HallucinationCheck -- Fedele? --> END
 ```
+=======
+    GradeDocs -- Documenti OK --> Generate
+    GradeDocs -- Nessun Doc --> Fallback
+    Generate --> HallucinationCheck
+    HallucinationCheck -- Grounded --> END
+    HallucinationCheck -- Hallucinated + Retries Left --> IncrementRetry
+    IncrementRetry --> Generate
+    HallucinationCheck -- Hallucinated + Max Retries --> Fallback
+    Fallback --> END
+```
+
+### Configurazione Retry Loop
+Il parametro `MAX_RETRIES` in `src/graph.py` controlla quanti tentativi di rigenerazione sono consentiti dopo il rilevamento di un'allucinazione. Il valore di default è `2`, il che significa che il generatore può essere invocato fino a 3 volte totali prima del fallback.
+>>>>>>> main
