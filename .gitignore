@@ -1,7 +1,5 @@
 .venv/
 .env
 __pycache__/
-data/*
-dataset/*
 qdrant_db/*
 docs/assignment/*

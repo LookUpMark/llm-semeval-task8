@@ -3,7 +3,21 @@
 Questa guida è stata scritta per accompagnarti **passo dopo passo** attraverso l'intero processo di valutazione e sottomissione per il SemEval 2026. Segui le istruzioni nell'ordine esatto in cui sono presentate.
 
 ---
+---
 
+## Fase 0: Verifica Dati (Knowledge Base)
+
+Prima di iniziare, assicurati che la cartella dei dati sia popolata.
+Il Task A (Retrieval) e il Task C (RAG) richiedono i documenti originali ("corpora") per funzionare.
+
+### 0.1 Controllo Cartelle
+Verifica che le seguenti cartelle esistano e contengano file:
+*   `dataset/human`: Contiene le domande di test (`reference.jsonl`).
+*   `dataset/corpora`: Contiene i documenti da recuperare (es. `mt-rag-clapnq...`).
+
+*Nota*: Se `dataset/corpora` è vuota, il retriever non troverà nulla! (L'abbiamo scaricata per te, ma controlla sempre).
+
+---
 ## Fase 1: Preparazione dell'Ambiente
 
 Prima di generare qualsiasi risultato, dobbiamo assicurarci che il tuo computer abbia tutti gli strumenti necessari installati.
