@@ -1,136 +1,129 @@
-# Manuale Definitivo per Valutazione e Submission (Zero-to-Hero)
+# Manuale Completo: SemEval 2026 Task 8 - Valutazione e Sottomissione
 
-Questa guida è stata scritta per accompagnarti **passo dopo passo** attraverso l'intero processo di valutazione e sottomissione per il SemEval 2026. Segui le istruzioni nell'ordine esatto in cui sono presentate.
-
----
----
-
-## Fase 0: Verifica Dati (Knowledge Base)
-
-Prima di iniziare, assicurati che la cartella dei dati sia popolata.
-Il Task A (Retrieval) e il Task C (RAG) richiedono i documenti originali ("corpora") per funzionare.
-
-### 0.1 Controllo Cartelle
-Verifica che le seguenti cartelle esistano e contengano file:
-*   `dataset/human`: Contiene le domande di test (`reference.jsonl`).
-*   `dataset/corpora`: Contiene i documenti da recuperare (es. `mt-rag-clapnq...`).
-
-*Nota*: Se `dataset/corpora` è vuota, il retriever non troverà nulla! (L'abbiamo scaricata per te, ma controlla sempre).
+Questa è la guida definitiva e onnicomprensiva per partecipare alla competizione. Questo documento non è una semplice lista di comandi, ma un manuale operativo dettagliato che spiega la logica, le motivazioni e i dettagli tecnici dietro ogni singola operazione. Copre ogni aspetto del ciclo di vita del progetto: dalla preparazione teorica e pratica dei dati, all'esecuzione ottimizzata della pipeline, fino alla verifica analitica dei risultati e alla sottomissione finale. Include inoltre sezioni approfondite sul funzionamento interno del sistema RAG e dell'architettura LangGraph.
 
 ---
-## Fase 1: Preparazione dell'Ambiente
 
-Prima di generare qualsiasi risultato, dobbiamo assicurarci che il tuo computer abbia tutti gli strumenti necessari installati.
+## 📚 Indice Dettagliato
+1.  [Fase 0: Verifica dei Dati (Knowledge Base)](#fase-0-verifica-dei-dati-knowledge-base)
+2.  [Fase 1: Preparazione dell'Ambiente Operativo](#fase-1-preparazione-dellambiente-operativo)
+3.  [Fase 2: Esecuzione della Pipeline (Generazione Risultati)](#fase-2-esecuzione-della-pipeline-generazione-risultati)
+4.  [Fase 3: Validazione Formale (Format Checker)](#fase-3-validazione-formale-format-checker)
+5.  [Fase 4: Valutazione Locale (Calcolo Metriche)](#fase-4-valutazione-locale-calcolo-metriche)
+6.  [Fase 5: Sottomissione Ufficiale](#fase-5-sottomissione-ufficiale)
+7.  [Approfondimento Tecnico: Il Motore del Sistema](#approfondimento-tecnico-il-motore-del-sistema)
+8.  [Architettura LangGraph Pipeline: Flusso Decisionale](#architettura-langgraph-pipeline-flusso-decisionale)
 
-### 1.1 Attivazione Environment
-Apri il terminale nella cartella principale del progetto e attiva il tuo ambiente virtuale.
-*Perché?* Gli script Python hanno bisogno delle librerie corrette per funzionare.
+---
 
-```bash
-# Se usi venv
-source .venv/bin/activate
-# Se usi Conda
-conda activate llm-semeval-task8
+## Fase 0: Verifica dei Dati (Knowledge Base)
+
+Prima ancora di scrivere o eseguire una riga di codice, dobbiamo stabilire le fondamenta del progetto: i dati. Un sistema RAG (Retrieval-Augmented Generation) è, per definizione, dipendente dalla sua base di conoscenza. Se questa manca o è corrotta, il sistema non può funzionare, indipendentemente dalla bontà del codice.
+
+Il primo passo fondamentale è quindi un audit del filesystem per assicurarsi che tutte le risorse necessarie siano presenti e correttamente posizionate. È essenziale verificare la presenza della cartella `dataset/human`. Questa cartella deve contenere i "compiti" che l'AI dovrà svolgere, ovvero i file JSONL con le domande. In particolare, durante la fase di sviluppo, il file cruciale è `dataset/human/generation_tasks/reference.jsonl`. Questo file contiene coppie domanda-risposta verificate da esseri umani e serve come "Gold Standard" per misurare le prestazioni del sistema prima della gara.
+
+Parallelamente, è vitale controllare la cartella `dataset/corpora`. Questa non è una semplice cartella, ma rappresenta la "memoria a lungo termine" del nostro assistente. Deve ospitare i documenti originali della Knowledge Base, che sono stati suddivisi dagli organizzatori in quattro domini specifici: `clapnq` (fatti generali), `cloud` (manualistica tecnica), `fiqa` (finanza), e `govt` (documenti legali). Assicurati che all'interno ci siano i file decompressi o le sottocartelle corrispondenti.
+
+> [!WARNING]
+> **Attenzione Critica**: Se la cartella `dataset/corpora` dovesse risultare vuota o parziale, il modulo di Retrieval (utilizzato obbligatoriamente nei Task A e C) cercherà invano. Il risultato sarà una lista di documenti vuota, che a sua volta porterà il generatore a non avere contesto, causando risposte "I don't know" o allucinazioni. Questo scenario garantisce un punteggio vicino allo zero nella valutazione ufficiale.
+
+---
+
+## Fase 1: Preparazione dell'Ambiente Operativo
+
+La riproducibilità è chiave nella scienza dei dati. L'ambiente di lavoro deve essere configurato in modo deterministico, con tutte le dipendenze corrette installate prima di eseguire qualsiasi script. Questo previene errori oscuri legati a versioni incompatibili di librerie.
+
+Inizia aprendo il terminale nella root del progetto (`llm-semeval-task8/`). Il primo comando deve essere l'attivazione del tuo virtual environment (ad esempio con `source .venv/bin/activate` o `conda activate ...`). Un indicatore visivo del successo sarà la comparsa del nome dell'ambiente tra parentesi nel prompt del terminale. Non sottovalutare questo passaggio: eseguire script installando pacchetti nell'ambiente globale del sistema operativo è una pratica rischiosa che può compromettere l'intero sistema.
+
+Successivamente, dobbiamo occuparci delle dipendenze specifiche per la valutazione. Gli script ufficiali forniti da IBM non si limitano alle librerie standard; richiedono strumenti specifici per il calcolo delle metriche NLP, come `ragas` (per la valutazione RAG), `scikit-learn` (per metriche statistiche) o `rouge_score`. Esegui il comando `pip install -c scripts/evaluation/constraints.txt -r scripts/evaluation/requirements.txt`. L'uso del file `constraints.txt` è importante perché forza l'installazione di versioni specifiche testate dagli organizzatori, garantendo che i tuoi risultati siano comparabili con quelli ufficiali. Se durante l'installazione riscontri problemi con `torch` (spesso dovuto a conflitti con CUDA), ti consigliamo di installarlo manualmente (`pip install torch==2.1.2`) prima di procedere, isolando così il problema.
+
+---
+
+## Fase 2: Esecuzione della Pipeline (Generazione Risultati)
+
+Una volta che i dati sono pronti e l'ambiente è stabile, passiamo all'azione: generare le risposte del modello. Invece di eseguire script separati e frammentati, utilizzeremo il notebook unificato **`notebooks/All_Tasks_Pipeline.ipynb`**. Questo strumento è stato ingegnerizzato per ottimizzare il flusso di lavoro, eseguendo la RAG Pipeline una sola volta per ogni domanda e distribuendo poi i risultati ai vari formati di output richiesti dai Task A, B e C. Questo approccio "Single Pass" riduce drasticamente i tempi di calcolo e i costi (se si usano API a pagamento).
+
+Apri il notebook e portati alla seconda cella per configurare le variabili principali. Dovrai impostare `TEAM_NAME` con il nome ufficiale del tuo team; questo identificativo verrà usato per nominare i file di output, facilitando la gestione delle versioni. Verifica attentamente che `INPUT_FILE` punti al file corretto: usa `dataset/human/generation_tasks/reference.jsonl` per i test locali di sviluppo. Quando inizierà la competizione, dovrai solo cambiare questo percorso per puntare al nuovo file di test cieco.
+
+Una volta configurato, avvia l'esecuzione di tutte le celle ("Run All"). Il notebook non è una scatola nera: ti mostrerà una barra di avanzamento mentre processa le domande. Per ogni input, invocherà la funzione `app.invoke` del grafo LangGraph. Al termine dell'elaborazione, estrarrà chirurgicamente i dati necessari: prenderà solo i contesti recuperati per il file del Task A, solo il testo generato per il file del Task B, ed entrambi per il Task C. Infine, salverà tre file distinti con estensione `.jsonl` nella cartella `data/submissions/`, pronti per la fase successiva.
+
+---
+
+## Fase 3: Validazione Formale (Format Checker)
+
+Nel contesto di una competizione internazionale, la forma è sostanza. La generazione dei file è solo metà dell'opera; è assolutamente cruciale che questi rispettino il formato rigoroso imposto dagli organizzatori fino all'ultima virgola. Un campo mancante, un nome sbagliato o una struttura JSON non valida possono portare all'invalidazione immediata della sottomissione, rendendo inutile tutto il lavoro svolto.
+
+Per evitare questo rischio, utilizza sempre lo script ufficiale `format_checker.py` per validare ogni file generato. Non fidarti della "ispezione visiva". Esegui i comandi validazione dal terminale per ogni task (Task A, B, C), assicurandoti di puntare ai file appena creati in `data/submissions/`. Lo script analizza la struttura del JSONL riga per riga.
+
+Se l'output conferma "Validation Successful!", puoi tirare un sospiro di sollievo: i file sono sintatticamente corretti. In caso di errori, lo script è molto verboso e ti indicherà la riga esatta e la natura del problema (es. "Campo 'score' mancante nell'oggetto context alla riga 42"). Questo ti permette di tornare al notebook, correggere la logica di estrazione dei dati e rigenerare i file finché non sono perfetti.
+
+---
+
+## Fase 4: Valutazione Locale (Calcolo Metriche)
+
+Fino alla data di inizio della competizione (10 Gennaio), non avrai feedback esterni. La tua bussola sarà la valutazione locale sul dataset di sviluppo. Questo ti permette di iterare velocemente: modifica il prompt, rigenera, valuta, ripeti.
+
+Per il **Task A (Retrieval)**, esegui `run_retrieval_eval.py`. Questo script confronta i documenti trovati dal tuo sistema con la lista dei documenti "Gold" definiti dagli esperti. Calcolerà metriche come la **Recall@5** (che misura la completezza: quanti dei documenti rilevanti totali sono stati trovati nei primi 5?) e il **nDCG@5** (che misura l'ordine: i documenti rilevanti sono in cima alla lista, dove l'utente guarda per primo, o in fondo?). Un punteggio nDCG alto indica un motore di ricerca di alta qualità.
+
+Per i **Task B e C (Generation)**, la valutazione è più complessa perché non esiste una sola risposta esatta in linguaggio naturale. Richiede quindi un "LLM Giudice" che agisca come un professore umano. Esegui `run_generation_eval.py` specificando un modello locale potente (come `ibm-granite/granite-3.3-8b-instruct`) o un provider API. Le metriche prodotte sono sofisticate: la **Faithfulness** misura se il modello ha inventato informazioni non presenti nei documenti (allucinazioni); l'**Answer Relevance** misura se la risposta è pertinente alla domanda posta; la **Correctness** verifica l'accuratezza fattuale rispetto alla risposta di riferimento.
+
+---
+
+## Fase 5: Sottomissione Ufficiale
+
+A partire dal 10 Gennaio 2026, la procedura cambierà leggermente per la gara ufficiale. In quella data, gli organizzatori rilasceranno il **Test Set Ufficiale**. Questo file conterrà solo le domande, senza le risposte o i documenti di riferimento.
+
+Il workflow sarà:
+1. Scaricare il nuovo file.
+2. Aggiornare la variabile `INPUT_FILE` nel notebook `All_Tasks_Pipeline.ipynb` per puntare a questo nuovo file.
+3. Eseguire la pipeline *senza* guardare i risultati (perché non avrai la ground truth).
+4. Validare con il `format_checker.py`.
+5. Caricare i file sulla piattaforma ufficiale.
+
+Ricorda il principio fondamentale del Machine Learning: non modificare mai il sistema basandoti sui risultati del Test Set (overfitting). La valutazione finale avverrà su dati mai visti prima, quindi un sistema robusto e generalizzabile vincerà su uno iper-ottimizzato per il training set.
+
+---
+
+## Approfondimento Tecnico: Il Motore del Sistema
+
+Per comprendere a fondo il funzionamento del sistema e poterlo migliorare, dobbiamo aprire il cofano e analizzare i tre componenti principali: la strategia di Retrieval, la natura della Knowledge Base e il processo Generativo.
+
+### 1. Il Modulo Retrieval (`src/retrieval.py`): Come troviamo l'ago nel pagliaio
+Questo modulo è il cuore pulsante della pipeline RAG. Il processo non è una semplice ricerca per parole chiave (come Ctrl+F), ma una ricerca semantica avanzata.
+Innanzitutto, la domanda dell'utente viene trasformata in un vettore numerico multi-dimensionale (embedding) tramite il modello **`BAAI/bge-m3`**. Questo permette di cercare per significato, non solo per keyword esatte.
+Successivamente, Qdrant (il database vettoriale) trova i documenti più simili. Per raffinare questa lista grezza, utilizziamo un modello Cross-Encoder molto preciso, il **`BAAI/bge-reranker-v2-m3`**, che riordina i risultati assegnando un punteggio di qualità. Solo i top-5 passano al generatore.
+
+### 2. I Documenti Recuperabili (`dataset/corpora`): I limiti della conoscenza
+Il sistema opera su una Knowledge Base chiusa, limitata ai documenti presenti in `dataset/corpora`. Non c'è accesso a Internet. La libreria digitale copre quattro domini: **CLAPNQ** (cultura generale), **FiQA** (finanza), **Govt** (legale) e **Cloud** (tecnico).
+
+### 3. La Valutazione (Dietro le quinte): Come ragionano i giudici
+La valutazione per i Task B e C (Generazione) si affida a un LLM Giudice che valuta la semantica della risposta. Nello specifico, gli script di valutazione locale utilizzano il modello **`ibm-granite/granite-3.3-8b-instruct`** per simulare il giudizio umano su metriche come Faithfulness e Correctness.
+
+---
+
+## Architettura LangGraph Pipeline: Flusso Decisionale e Gestione dei Casi Limite 🧠
+
+Un sistema RAG avanzato non è una sequenza lineare di istruzioni. Va immaginato come un agente intelligente capace di prendere decisioni, valutare il proprio operato e correggere la rotta se necessario. Questa logica complessa è orchestrata da **LangGraph**, che gestisce il flusso attraverso nodi funzionali e ramificazioni decisionali. Di seguito descriviamo narrativamente il percorso di una richiesta utente, specificando i modelli utilizzati.
+
+Il viaggio inizia nel nodo **`rewrite_node`**, che agisce come un traduttore intelligente. Spesso gli utenti formulano domande ambigue o dipendenti dal contesto (es. "Chi è lui?"). Qui utilizziamo il modello **`meta-llama/Llama-3.1-8B-Instruct`** per riscrivere la query rendendola autonoma ed esplicita (es. "Chi è Elon Musk?"). Se la domanda è già chiara, il modello la lascia invariata, gestendo così l'edge case dell'identità.
+
+L'output passa al **`retrieve_node`**, il bibliotecario del sistema. Utilizzando il modello di embedding **`BAAI/bge-m3`** e il reranker **`BAAI/bge-reranker-v2-m3`**, questo nodo interroga il database Qdrant per recuperare i documenti più pertinenti. Un caso limite importante qui è il fallimento del retrieval: se il database è vuoto o offline, il nodo restituisce una lista vuota, preparando il sistema a un possibile fallback.
+
+I documenti recuperati vengono poi esaminati dal **`grade_documents_node`**, un filtro di qualità critico. Anche qui ci affidiamo a **`meta-llama/Llama-3.1-8B-Instruct`**, che legge ogni documento e decide se contiene informazioni utili. Questo passaggio è fondamentale per filtrare il "rumore". Se tutti i documenti vengono scartati come irrilevanti, il grafo attiva un bivio decisionale intelligente: invece di procedere, devia verso il fallback per rispondere "Non lo so", evitando di inventare informazioni.
+
+Se invece i documenti superano il filtro, il **`generate_node`** entra in azione. Sempre guidato da **`meta-llama/Llama-3.1-8B-Instruct`**, questo nodo compone la risposta finale utilizzando esclusivamente le informazioni verificate.
+
+L'ultimo baluardo prima dell'utente è il **`hallucination_check_node`** (Self-RAG). Qui, un'altra istanza di **`meta-llama/Llama-3.1-8B-Instruct`** agisce come un fact-checker paranoico, confrontando ogni frase generata con i documenti di supporto. Se rileva un'allucinazione (un'informazione non supportata dal testo), blocca la risposta e attiva il fallback. Solo le risposte verificate e fedeli raggiungono l'utente finale.
+
+### Riassunto Flusso Visivo
+```mermaid
+graph TD
+    Start --> Rewrite
+    Rewrite --> Retrieve
+    Retrieve --> GradeDocs
+    GradeDocs -- Documenti OK? --> Generate
+    GradeDocs -- Nessun Doc? --> Fallback
+    Generate --> HallucinationCheck
+    HallucinationCheck -- Allucinazione? --> Fallback
+    HallucinationCheck -- Fedele? --> END
 ```
-*Cosa succede:* Il nome del tuo environment apparirà all'inizio della riga di comando (es. `(.venv) user@pc:~$`).
-
-### 1.2 Installazione Dipendenze di Valutazione
-Abbiamo importato gli script ufficiali di IBM nella cartella `scripts/evaluation`. Questi script richiedono pacchetti specifici.
-
-```bash
-pip install -c scripts/evaluation/constraints.txt -r scripts/evaluation/requirements.txt
-```
-*Cosa succede:* Il terminale scaricherà e installerà librerie come `ragas` o `scikit-learn` necessarie per calcolare i punteggi. Se vedi scritte bianche che scorrono e finisce con "Successfully installed...", è andato tutto bene.
-
----
-
-## Fase 2: Generazione delle Risposte (Submission)
-
-Ora dobbiamo usare il tuo modello per rispondere alle domande del test set. Abbiamo creato un notebook automatico per questo.
-
-### 2.1 Apri il Notebook di Submission
-1. Avvia Jupyter Lab o VS Code.
-2. Naviga nella cartella `eval/`.
-3. Apri il file `submission_pipeline.ipynb`.
-
-### 2.2 Configurazione del Notebook
-Vai alla **Cella 2 ("Configurazione")** del notebook.
-Modifica le seguenti variabili:
-- `TEAM_NAME`: Scrivi il nome del tuo team (es. `"SuperRAGTeam"`).
-- `TASK_NAME`: Lascia `"TaskB"` se stai facendo la generazione.
-- `INPUT_FILE`: Assicurati che punti al file corretto (di default: `../dataset/human/generation_tasks/reference.jsonl`).
-
-### 2.3 Esecuzione
-Clicca su "Run All" o esegui le celle una per una.
-
-*Cosa succede passo per passo nel notebook:*
-1.  **Caricamento**: Legge il file JSONL originale. Ti dirà "Caricate X istanze".
-2.  **Inferenza**: Eseguirà la tua RAG Pipeline per OGNI domanda. Vedrai una barra di progresso.
-    *   *Nota*: Potrebbe volerci del tempo a seconda della velocità del tuo modello.
-3.  **Salvataggio**: Creerà un NUOVO file in `data/submissions/` chiamato `submission_TaskB_SuperRAGTeam.jsonl`.
-4.  **Auto-Validazione**: L'ultima cella farà un controllo preliminare. Se vedi una scritta verde "Validation Passed", procedi alla fase successiva.
-
----
-
-## Fase 3: Validazione Ufficiale (Format Checker)
-
-Anche se il notebook dice che è tutto ok, **DEVI** usare lo script ufficiale per essere sicuro al 100% che il file non venga rifiutato.
-
-### 3.1 Esegui il comando di validazione
-Torna al terminale (dove hai attivato l'ambiente). Esegui questo comando esatto, sostituendo il nome del file con quello appena creato:
-
-```bash
-python scripts/evaluation/format_checker.py \
-    --input_file dataset/human/generation_tasks/reference.jsonl \
-    --prediction_file data/submissions/submission_TaskB_MioTeam.jsonl \
-    --mode generation_taskb
-```
-
-### 3.2 Analisi dell'Output
-*   **Se va tutto bene**:
-    Vedrai un output simile a:
-    ```
-    Loading file...
-    Checking structure...
-    Validation Successful! File is ready for submission.
-    ```
-*   **Se c'è un errore**:
-    Lo script ti dirà esattamente cosa non va (es. "Missing prediction field at line 5").
-    *Cosa fare:* Se succede, controlla il notebook `submission_pipeline.ipynb` e rieseguilo.
-
----
-
-## Fase 4: Valutazione Locale (Opzionale ma Raccomandata)
-
-Se vuoi sapere che punteggio fa il tuo modello PRIMA di inviarlo, puoi usare gli script di valutazione locale.
-
-### 4.1 Valutazione Retrieval (Task A)
-Se hai generato un file con i contesti recuperati:
-```bash
-python scripts/evaluation/run_retrieval_eval.py \
-    --input_file data/submissions/submission_TaskA_MioTeam.jsonl \
-    --output_file eval/results_retrieval.json
-```
-*Cosa succede:* Calcola Recall e nDCG. Troverai i risultati in `eval/results_retrieval.json`.
-
-### 4.2 Valutazione Generation (Task B)
-Questa fase richiede molta memoria (usa Llama come giudice).
-```bash
-python scripts/evaluation/run_generation_eval.py \
-    --input_file data/submissions/submission_TaskB_MioTeam.jsonl \
-    --output_file eval/results_generation.json \
-    --config scripts/evaluation/config.yaml \
-    --provider hf \
-    --judge_model ibm-granite/granite-3.3-8b-instruct
-```
-*Cosa succede:* Il "modello giudice" leggerà le tue risposte e darà un voto.
-
----
-
-## Fase 5: Invio (Submission)
-
-1.  Vai al link del **Google Form** fornito sulla pagina della competizione (sarà attivo solo dal 12 Gennaio).
-2.  Carica il file `.jsonl` che hai validato nella Fase 3.
-3.  Clicca invio.
-
-**Ricorda**: Vale solo l'ultima sottomissione. Invia solo quando sei sicuro.
