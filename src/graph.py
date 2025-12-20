@@ -1,15 +1,9 @@
 """
 Graph Orchestration Module for MTRAGEval.
 
-This module assembles the Self-CRAG LangGraph workflow:
-- rewrite_node: Rewrites context-dependent queries
-- retrieve_node: Searches the vector store
-- grade_docs_node: Filters irrelevant documents (CRAG)
-- generate_node: Produces the answer
-- hallucination_check_node: Validates against source documents (Self-RAG)
-- fallback_node: Returns I_DONT_KNOW when confidence is low
-
-Includes conditional edges for the corrective and self-reflective logic.
+Self-CRAG workflow with Retry Loop:
+When hallucination is detected, retries generation up to MAX_RETRIES times
+before falling back to "I_DONT_KNOW".
 """
 
 from langgraph.graph import StateGraph, END, START
@@ -18,9 +12,14 @@ from src.state import GraphState
 from src.generation import query_rewriter, generator, retrieval_grader, hallucination_grader
 from src.retrieval import get_retriever, format_docs_for_gen
 
-# --- NODE DEFINITIONS ---
+# Configuration
+MAX_RETRIES = 2
+
+
+# --- NODES ---
 
 def rewrite_node(state: GraphState) -> dict:
+<<<<<<< Updated upstream
     """
     Node 1: Rewrites the user query.
     
@@ -130,12 +129,47 @@ def fallback_node(state: GraphState) -> dict:
         NotImplementedError: Function not yet implemented.
     """
     raise NotImplementedError("fallback_node: Implement fallback response")
+=======
+    """Rewrites ambiguous queries to be standalone."""
+    raise NotImplementedError("rewrite_node")
+
+
+def retrieve_node(state: GraphState) -> dict:
+    """Searches Qdrant and resets retry_count to 0."""
+    raise NotImplementedError("retrieve_node")
+
+
+def grade_documents_node(state: GraphState) -> dict:
+    """Filters irrelevant documents. Sets documents_relevant flag."""
+    raise NotImplementedError("grade_documents_node")
+
+
+def generate_node(state: GraphState) -> dict:
+    """Generates answer from filtered documents."""
+    raise NotImplementedError("generate_node")
+
+
+def hallucination_check_node(state: GraphState) -> dict:
+    """Checks if generation is grounded in documents."""
+    raise NotImplementedError("hallucination_check_node")
+
+
+def increment_retry_node(state: GraphState) -> dict:
+    """Increments retry_count before re-generation attempt."""
+    raise NotImplementedError("increment_retry_node")
+
+
+def fallback_node(state: GraphState) -> dict:
+    """Returns I_DONT_KNOW when all else fails."""
+    raise NotImplementedError("fallback_node")
+>>>>>>> Stashed changes
 
 
 # --- CONDITIONAL EDGES ---
 
 def decide_to_generate(state: GraphState) -> str:
     """
+<<<<<<< Updated upstream
     Conditional edge: Decide whether to generate or fallback.
     
     Args:
@@ -146,12 +180,16 @@ def decide_to_generate(state: GraphState) -> str:
         
     Raises:
         NotImplementedError: Function not yet implemented.
+=======
+    After grading: 'generate' if docs relevant, else 'fallback'.
+>>>>>>> Stashed changes
     """
-    raise NotImplementedError("decide_to_generate: Implement generation decision logic")
+    raise NotImplementedError("decide_to_generate")
 
 
 def decide_to_final(state: GraphState) -> str:
     """
+<<<<<<< Updated upstream
     Conditional edge: Decide whether to accept generation or fallback.
     
     Args:
@@ -162,16 +200,23 @@ def decide_to_final(state: GraphState) -> str:
         
     Raises:
         NotImplementedError: Function not yet implemented.
+=======
+    After hallucination check:
+    - 'end' if grounded
+    - 'increment_retry' if hallucinated but retries left
+    - 'fallback' if max retries reached
+>>>>>>> Stashed changes
     """
-    raise NotImplementedError("decide_to_final: Implement final decision logic")
+    raise NotImplementedError("decide_to_final")
 
 
 # --- GRAPH CONSTRUCTION ---
 
 def build_graph() -> StateGraph:
     """
-    Builds and compiles the Self-CRAG workflow graph.
+    Builds Self-CRAG graph with retry loop.
     
+<<<<<<< Updated upstream
     Graph structure:
     START -> rewrite -> retrieve -> grade_docs 
           -> [conditional: generate or fallback]
@@ -184,15 +229,24 @@ def build_graph() -> StateGraph:
         
     Raises:
         NotImplementedError: Function not yet implemented.
+=======
+    Flow:
+    START -> rewrite -> retrieve -> grade_docs
+    -> [generate if docs OK, else fallback]
+    -> hallucination_check
+    -> [end if grounded, increment_retry if retries left, fallback if max]
+    -> increment_retry loops back to generate
+>>>>>>> Stashed changes
     """
-    raise NotImplementedError("build_graph: Implement LangGraph workflow construction")
+    raise NotImplementedError("build_graph")
 
 
-# Placeholder for compiled app
-app = None  # type: ignore
+# Compiled app placeholder
+app = None
 
 
 def initialize_graph():
+<<<<<<< Updated upstream
     """
     Initialize and compile the graph.
     
@@ -202,3 +256,8 @@ def initialize_graph():
         NotImplementedError: Function not yet implemented.
     """
     raise NotImplementedError("initialize_graph: Implement graph initialization")
+=======
+    """Initializes the graph. Call once at startup."""
+    global app
+    app = build_graph()
+>>>>>>> Stashed changes
