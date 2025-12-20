@@ -4,6 +4,4 @@ __pycache__/
 data/*
 dataset/*
 qdrant_db/*
-member*.md
 docs/assignment/*
-scripts/evaluation/*

@@ -27,6 +27,13 @@ def get_retriever() -> ContextualCompressionRetriever:
     """
     Returns an advanced retriever: Vector Search (Top 20) -> Rerank (Top 5).
     
+    Implementation Steps:
+    1. Initialize QdrantVectorStore with BGE-M3 embeddings.
+    2. Create a base retriever from it (search_type="similarity", k=20).
+    3. Initialize HuggingFaceCrossEncoder with BGE-Reranker-v2-M3.
+    4. Create CrossEncoderReranker with top_n=5.
+    5. Wrap everything in ContextualCompressionRetriever.
+    
     Returns:
         ContextualCompressionRetriever with vector base and cross-encoder reranker.
         

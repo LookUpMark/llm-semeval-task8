@@ -24,17 +24,10 @@ def rewrite_node(state: GraphState) -> dict:
     """
     Node 1: Rewrites the user query.
     
-    Takes the user's question and conversation history, 
-    rewrites context-dependent questions to standalone form.
-    
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        Dict with 'standalone_question' key.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Implementation Steps:
+    1. Extract 'question' and 'messages' from state.
+    2. Invoke 'query_rewriter' chain.
+    3. Return {'standalone_question': result}.
     """
     raise NotImplementedError("rewrite_node: Implement query rewriting logic")
 
@@ -43,16 +36,11 @@ def retrieve_node(state: GraphState) -> dict:
     """
     Node 2: Searches the Vector Store.
     
-    Uses the standalone question to retrieve relevant documents.
-    
-    Args:
-        state: Current graph state with standalone_question.
-        
-    Returns:
-        Dict with 'documents' key containing retrieved docs.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Implementation Steps:
+    1. Extract 'standalone_question' from state.
+    2. Get retriever via get_retriever().
+    3. Invoke retriever with question.
+    4. Return {'documents': retrieved_docs}.
     """
     raise NotImplementedError("retrieve_node: Implement vector store retrieval")
 
@@ -61,17 +49,12 @@ def grade_documents_node(state: GraphState) -> dict:
     """
     Node 3: Filters irrelevant documents.
     
-    Uses retrieval_grader to evaluate each document's relevance.
-    Handles JSON parsing errors by defaulting to 'no' (safe fallback).
-    
-    Args:
-        state: Current graph state with documents.
-        
-    Returns:
-        Dict with filtered 'documents' and 'documents_relevant' flag.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Implementation Steps:
+    1. Extract 'documents' and 'standalone_question'.
+    2. Iterate through docs and invoke 'retrieval_grader'.
+    3. Keep only docs with binary_score='yes'.
+    4. Set 'documents_relevant' flag ('yes' if any relevant, else 'no').
+    5. Return {'documents': filtered_docs, 'documents_relevant': flag}.
     """
     raise NotImplementedError("grade_documents_node: Implement CRAG document filtering")
 
@@ -80,17 +63,11 @@ def generate_node(state: GraphState) -> dict:
     """
     Node 4: Generates the response.
     
-    Uses generator to produce answer from documents and question.
-    Empty context leads to I_DONT_KNOW response.
-    
-    Args:
-        state: Current graph state with filtered documents.
-        
-    Returns:
-        Dict with 'generation' key containing the answer.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Implementation Steps:
+    1. Extract 'question' and 'documents'.
+    2. Format docs string using format_docs_for_gen().
+    3. Invoke 'generator' chain.
+    4. Return {'generation': result}.
     """
     raise NotImplementedError("generate_node: Implement answer generation")
 
@@ -99,17 +76,11 @@ def hallucination_check_node(state: GraphState) -> dict:
     """
     Node 5: Post-generation verification.
     
-    Uses hallucination_grader to check if generation is supported
-    by the source documents.
-    
-    Args:
-        state: Current graph state with generation.
-        
-    Returns:
-        Dict with 'is_hallucination' flag.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Implementation Steps:
+    1. Extract 'documents' and 'generation'.
+    2. Invoke 'hallucination_grader'.
+    3. Return {'is_hallucination': 'yes' if supported, 'no' if hallucinated}.
+    (Note: 'yes' usually means grounded/supported, check prompt logic).
     """
     raise NotImplementedError("hallucination_check_node: Implement Self-RAG hallucination check")
 
@@ -118,16 +89,8 @@ def fallback_node(state: GraphState) -> dict:
     """
     Fallback Node: Returns I_DONT_KNOW.
     
-    Used when documents are irrelevant or generation is hallucinated.
-    
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        Dict with 'generation': 'I_DONT_KNOW' and empty 'messages'.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Implementation Steps:
+    1. Return {'generation': "I_DONT_KNOW"}.
     """
     raise NotImplementedError("fallback_node: Implement fallback response")
 
@@ -138,14 +101,9 @@ def decide_to_generate(state: GraphState) -> str:
     """
     Conditional edge: Decide whether to generate or fallback.
     
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        'generate' if documents are relevant, 'fallback' otherwise.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Logic:
+    - If documents_relevant == 'yes' -> 'generate'
+    - Else -> 'fallback' (OR 'rewrite' if implementing advanced loop)
     """
     raise NotImplementedError("decide_to_generate: Implement generation decision logic")
 
@@ -154,14 +112,9 @@ def decide_to_final(state: GraphState) -> str:
     """
     Conditional edge: Decide whether to accept generation or fallback.
     
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        'end' if generation is supported, 'fallback' if hallucinated.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Logic:
+    - If is_hallucination == 'yes' (supported) -> 'end'
+    - Else -> 'fallback' (or 'generate' retry)
     """
     raise NotImplementedError("decide_to_final: Implement final decision logic")
 
@@ -172,18 +125,14 @@ def build_graph() -> StateGraph:
     """
     Builds and compiles the Self-CRAG workflow graph.
     
-    Graph structure:
-    START -> rewrite -> retrieve -> grade_docs 
-          -> [conditional: generate or fallback]
-          -> generate -> hallucination_check 
-          -> [conditional: end or fallback]
-          -> END
-    
-    Returns:
-        Compiled StateGraph application.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
+    Steps:
+    1. Initialize StateGraph(GraphState).
+    2. Add all nodes defined above.
+    3. Add START -> rewrite -> retrieve -> grade_docs edges.
+    4. Add conditional edge from grade_docs (decide_to_generate).
+    5. Add normal edges from generate -> hallucination_check.
+    6. Add conditional edge from hallucination_check (decide_to_final).
+    7. Compile and return.
     """
     raise NotImplementedError("build_graph: Implement LangGraph workflow construction")
 
@@ -195,10 +144,6 @@ app = None  # type: ignore
 def initialize_graph():
     """
     Initialize and compile the graph.
-    
-    Must be called before using 'app'.
-    
-    Raises:
-        NotImplementedError: Function not yet implemented.
     """
-    raise NotImplementedError("initialize_graph: Implement graph initialization")
+    global app
+    app = build_graph()
