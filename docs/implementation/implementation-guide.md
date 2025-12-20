@@ -915,15 +915,31 @@ def decide_to_generate(state: GraphState):
     else:
         return "fallback"
 
+def increment_retry_node(state: GraphState):
+    """Incrementa retry_count prima di ritentare."""
+    print("--- INCREMENT RETRY ---")
+    return {"retry_count": state.get("retry_count", 0) + 1}
+
 def decide_to_final(state: GraphState):
-    if state["is_hallucination"] == "yes":
-        # Se è supportato dai doc (yes) -> ok
-        print("DECISION: GENERATION ACCEPTED")
+    """
+    Post-hallucination: decide accettare, ritentare o fallback.
+    - Se grounded (yes) -> end
+    - Se allucinazione + retry disponibili -> increment_retry
+    - Se allucinazione + max retry -> fallback
+    """
+    is_grounded = state["is_hallucination"] == "yes"
+    retry_count = state.get("retry_count", 0)
+    
+    if is_grounded:
+        print("DECISION: ACCEPTED")
         return "end"
+    elif retry_count < MAX_RETRIES:
+        print(f"DECISION: RETRY ({retry_count + 1}/{MAX_RETRIES})")
+        return "increment_retry"
     else:
-        # Se non è supportato (no) -> fallback
-        print("DECISION: HALLUCINATION -> FALLBACK")
+        print("DECISION: MAX RETRIES -> FALLBACK")
         return "fallback"
+
 
 # --- COSTRUZIONE DEL GRAFO ---
 workflow = StateGraph(GraphState)
@@ -934,7 +950,9 @@ workflow.add_node("retrieve", retrieve_node)
 workflow.add_node("grade_docs", grade_documents_node)
 workflow.add_node("generate", generate_node)
 workflow.add_node("hallucination_check", hallucination_check_node)
+workflow.add_node("increment_retry", increment_retry_node)  # NUOVO: Retry Loop
 workflow.add_node("fallback", fallback_node)
+
 ```
 
 **Flusso Lineare Iniziale:**
@@ -964,19 +982,24 @@ workflow.add_edge("generate", "hallucination_check")
 **Bivio Decisionale 2 (Post-Generation):**
 
 ```python
-# Se la risposta è fedele -> END. Se no -> fallback.
+# Se la risposta è fedele -> END. Se allucinazione + retry left -> increment_retry. Se max retry -> fallback.
 workflow.add_conditional_edges(
     "hallucination_check",
     decide_to_final,
     {
         "end": END,
+        "increment_retry": "increment_retry",  # NUOVO: loop per ritentare
         "fallback": "fallback"
     }
 )
 
+# NUOVO: Dopo increment_retry, torniamo a generate (crea il loop)
+workflow.add_edge("increment_retry", "generate")
+
 workflow.add_edge("fallback", END)
 
 app = workflow.compile()
+
 ```
 
 **Dettaglio Tecnico:**
