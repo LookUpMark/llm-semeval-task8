@@ -273,7 +273,7 @@ def load_and_chunk_data(json_path: str):
     RICHIEDE: Il file corpus JSON presente in /data.
     """
     print(f"--- LOADING DATA FROM {json_path} ---") 
-    # ESEMPIO: json_path potrebbe essere "./data/corpus.json" o simile.
+    # ESEMPIO: json_path potrebbe essere "./dataset/corpora/passage_level/govt.jsonl" o simile.
     
     try:
         with open(json_path, 'r') as f:
