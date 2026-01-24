@@ -93,7 +93,7 @@ def main():
                 continue
             
             try:
-                response = app.invoke({"question": question})
+                response = app.invoke({"question": question, "domain": domain})
                 gen_text = response.get("generation", "No Answer")
             except Exception as e:
                 print(f"Error: {e}")

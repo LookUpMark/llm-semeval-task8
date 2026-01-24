@@ -113,7 +113,7 @@ def main():
                 continue
             
             try:
-                response = app.invoke({"question": question})
+                response = app.invoke({"question": question, "domain": domain})
                 raw_docs = response.get("documents", [])
                 gen_text = response.get("generation", "No Answer")
             except Exception as e:

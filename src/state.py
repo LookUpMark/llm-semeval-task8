@@ -51,5 +51,9 @@ class GraphState(TypedDict):
     
     is_hallucination: str    # 'yes' or 'no'
     
+    # Domain for corpus-specific retrieval (e.g., 'govt', 'clapnq', 'fiqa', 'cloud')
+    domain: str
+    
     # Counter to prevent infinite correction loops.
     retry_count: int
+

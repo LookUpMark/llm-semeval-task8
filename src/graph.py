@@ -4,59 +4,190 @@ Graph Orchestration Module for MTRAGEval.
 Self-CRAG workflow with Retry Loop:
 When hallucination is detected, retries generation up to MAX_RETRIES times
 before falling back to "I_DONT_KNOW".
+
+This module integrates:
+- Retrieval: Qdrant vector search with BGE-M3 + cross-encoder reranking
+- Generation: Llama 3.1 8B Instruct (4-bit quantized)
+- Grading: Document relevance and hallucination detection chains
 """
 
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import AIMessage, HumanMessage
 from .state import GraphState
-# from .retrieval import get_retriever, format_docs_for_gen
-# from .generation import query_rewriter, generator, retrieval_grader, hallucination_grader
+from .retrieval import get_retriever, format_docs_for_gen
+from .generation import create_generation_components
 
 # Configuration
 MAX_RETRIES = 2
+QDRANT_PATH = "./qdrant_db"
+
+# Module-level components (initialized lazily)
+_components = None
+_retriever = None
+_current_domain = None
+
+
+def _get_components():
+    """Lazy initialization of generation components."""
+    global _components
+    if _components is None:
+        print("🔧 Loading LLM and generation components...")
+        _components = create_generation_components()
+    return _components
+
+
+def _get_retriever_for_domain(domain: str):
+    """Get or create retriever for specific domain."""
+    global _retriever, _current_domain
+    
+    collection_name = f"mtrag_{domain}"
+    
+    # Reuse if same domain
+    if _retriever is not None and _current_domain == domain:
+        return _retriever
+    
+    print(f"🔍 Initializing retriever for collection: {collection_name}")
+    _retriever = get_retriever(
+        qdrant_path=QDRANT_PATH,
+        collection_name=collection_name,
+        top_k_retrieve=20,
+        top_k_rerank=5
+    )
+    _current_domain = domain
+    return _retriever
 
 
 # --- NODES ---
 
 def rewrite_node(state: GraphState) -> dict:
-    """Rewrites ambiguous queries to be standalone."""
-    print("--- DEBUG: Execution rewrite_node ---")
-    return {"standalone_question": state.get("question", "")}
+    """Rewrites context-dependent questions to standalone form."""
+    components = _get_components()
+    question = state.get("question", "")
+    messages = state.get("messages", [])
+    
+    # Format chat history for rewriter
+    chat_history = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            chat_history.append(("human", msg.content))
+        elif isinstance(msg, AIMessage):
+            chat_history.append(("ai", msg.content))
+    
+    try:
+        result = components.query_rewriter.invoke({
+            "question": question,
+            "chat_history": chat_history
+        })
+        standalone = result if isinstance(result, str) else str(result)
+    except Exception as e:
+        print(f"⚠️ Rewrite failed: {e}, using original question")
+        standalone = question
+    
+    return {"standalone_question": standalone}
 
 
 def retrieve_node(state: GraphState) -> dict:
-    """Searches Qdrant and resets retry_count to 0."""
-    print("--- DEBUG: Execution retrieve_node ---")
-    return {"documents": ["Dummy document 1", "Dummy document 2"], "retry_count": 0}
+    """Searches Qdrant for relevant documents."""
+    question = state.get("standalone_question") or state.get("question", "")
+    domain = state.get("domain", "govt")  # Default to govt if not specified
+    
+    try:
+        retriever = _get_retriever_for_domain(domain)
+        documents = retriever.invoke(question)
+    except Exception as e:
+        print(f"⚠️ Retrieval failed: {e}")
+        documents = []
+    
+    return {"documents": documents, "retry_count": 0}
 
 
 def grade_documents_node(state: GraphState) -> dict:
-    """Filters irrelevant documents. Sets documents_relevant flag."""
-    print("--- DEBUG: Execution grade_document_node ---")
-    return {"documents_relevant": "yes"}
+    """Filters irrelevant documents using CRAG grading."""
+    components = _get_components()
+    documents = state.get("documents", [])
+    question = state.get("standalone_question") or state.get("question", "")
+    
+    if not documents:
+        return {"documents_relevant": "no", "documents": []}
+    
+    # Grade each document
+    relevant_docs = []
+    for doc in documents:
+        try:
+            doc_content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+            result = components.retrieval_grader.invoke({
+                "document": doc_content,
+                "question": question
+            })
+            # Parse result
+            score = result.get("binary_score", "no") if isinstance(result, dict) else "no"
+            if score == "yes":
+                relevant_docs.append(doc)
+        except Exception as e:
+            print(f"⚠️ Grading error: {e}")
+            relevant_docs.append(doc)  # Keep on error
+    
+    has_relevant = "yes" if relevant_docs else "no"
+    return {"documents_relevant": has_relevant, "documents": relevant_docs}
 
 
 def generate_node(state: GraphState) -> dict:
-    """Generates answer from filtered documents."""
-    print("--- DEBUG: Execution generate_node ---")
-    return {"generation": "Simulate response based on documents"}
+    """Generates answer from documents using Llama."""
+    components = _get_components()
+    documents = state.get("documents", [])
+    question = state.get("standalone_question") or state.get("question", "")
+    
+    # Format context from documents
+    context = format_docs_for_gen(documents) if documents else ""
+    
+    try:
+        result = components.generator.invoke({
+            "context": context,
+            "question": question
+        })
+        generation = result if isinstance(result, str) else str(result)
+    except Exception as e:
+        print(f"⚠️ Generation failed: {e}")
+        generation = "I_DONT_KNOW"
+    
+    return {"generation": generation}
 
 
 def hallucination_check_node(state: GraphState) -> dict:
     """Checks if generation is grounded in documents."""
-    print("--- DEBUG: Execution hallucination_check_node ---")
-    return {"is_hallucination": "no"}
+    components = _get_components()
+    documents = state.get("documents", [])
+    generation = state.get("generation", "")
+    
+    if not documents or generation == "I_DONT_KNOW":
+        return {"is_hallucination": "no"}
+    
+    # Format documents for grader
+    doc_text = format_docs_for_gen(documents)
+    
+    try:
+        result = components.hallucination_grader.invoke({
+            "documents": doc_text,
+            "generation": generation
+        })
+        # "yes" = grounded (not hallucinated), "no" = hallucinated
+        score = result.get("binary_score", "yes") if isinstance(result, dict) else "yes"
+        is_hallucination = "no" if score == "yes" else "yes"
+    except Exception as e:
+        print(f"⚠️ Hallucination check failed: {e}")
+        is_hallucination = "no"  # Assume grounded on error
+    
+    return {"is_hallucination": is_hallucination}
 
 
 def increment_retry_node(state: GraphState) -> dict:
     """Increments retry_count before re-generation attempt."""
-    print("--- DEBUG: Execution increment_retry_node ---")
     current_retry = state.get("retry_count", 0)
     return {"retry_count": current_retry + 1}
 
+
 def fallback_node(state: GraphState) -> dict:
     """Returns I_DONT_KNOW when all else fails."""
-    print("--- DEBUG: Execution fallback_node ---")
     return {"generation": "I_DONT_KNOW"}
 
 
@@ -80,10 +211,10 @@ def decide_to_final(state: GraphState) -> str:
     is_hallucination = state.get("is_hallucination", "no")
     retry_count = state.get("retry_count", 0)
     
-    if  is_hallucination == "no":
+    if is_hallucination == "no":
         return "end"
     
-    if  retry_count < MAX_RETRIES:
+    if retry_count < MAX_RETRIES:
         return "increment_retry"
     
     return "fallback"
@@ -103,10 +234,9 @@ def build_graph() -> StateGraph:
     -> increment_retry loops back to generate
     """
     
-    # 1. Init the graph with state
     workflow = StateGraph(GraphState)
     
-    # 2. Registry the nodes
+    # Register nodes
     workflow.add_node("rewrite", rewrite_node)
     workflow.add_node("retrieve", retrieve_node)
     workflow.add_node("grade_docs", grade_documents_node)
@@ -115,40 +245,30 @@ def build_graph() -> StateGraph:
     workflow.add_node("increment_retry", increment_retry_node)
     workflow.add_node("fallback", fallback_node)
     
-    # 3. Define initial linear flow
+    # Linear flow
     workflow.add_edge(START, "rewrite")
     workflow.add_edge("rewrite", "retrieve")
     workflow.add_edge("retrieve", "grade_docs")
     
-    # 4. Add firs decision branch (CRAG)
+    # CRAG decision
     workflow.add_conditional_edges(
         "grade_docs", 
         decide_to_generate, 
-        {
-            "generate": "generate", 
-            "fallback": "fallback"
-        }
+        {"generate": "generate", "fallback": "fallback"}
     )
     
-    # 5. Add generation node and control
     workflow.add_edge("generate", "hallucination_check")
     
-    # 6. Add second decision branch (Self-RAG with loop)
+    # Self-RAG decision with retry loop
     workflow.add_conditional_edges(
         "hallucination_check",
         decide_to_final, 
-        {
-            "end": END,
-            "increment_retry": "increment_retry",
-            "fallback": "fallback"
-        }
+        {"end": END, "increment_retry": "increment_retry", "fallback": "fallback"}
     )
     
-    # 7. Close the retry loop
     workflow.add_edge("increment_retry", "generate")
     workflow.add_edge("fallback", END)
     
-    # 8. Compile the graph in an executable application
     return workflow.compile()
 
 
@@ -161,4 +281,3 @@ def initialize_graph():
     global app
     app = build_graph()
     return app
-
