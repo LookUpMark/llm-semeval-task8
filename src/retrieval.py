@@ -19,8 +19,8 @@ from langchain_classic.retrievers.document_compressors import CrossEncoderRerank
 
 # CONFIGURATION
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
-# Using lightweight reranker (~80MB) instead of BGE-Reranker-v2-M3 (2.2GB)
-RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# SOTA Reranker (heavier but better accuracy)
+RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 # Use CPU for embeddings to save GPU memory for LLM
 EMBEDDING_DEVICE = "cpu"
 RERANKER_DEVICE = "cpu"
