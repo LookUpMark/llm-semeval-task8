@@ -4,3 +4,4 @@ __pycache__/
 qdrant_db/*
 docs/assignment/*
 venv
+*.jsonl
