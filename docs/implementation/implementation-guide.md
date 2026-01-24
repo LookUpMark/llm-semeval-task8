@@ -54,9 +54,9 @@ Prima di installare qualsiasi cosa, **dovete procurarvi i dati**. Senza dati, Me
 2.  **Individuazione File (Corpora - Task A):** Nel repo scaricato, andate in `corpora/passage_level/`. Troverete 4 file zip: `clapnq.jsonl.zip`, `cloud.json.zip`, `fiqa.jsonl.zip`, `govt.jsonl.zip`.
 3.  **Individuazione File (Evaluation - Task C):** Andate in `human/generation_tasks/`. Troverete `reference+RAG.jsonl` (Target per Task C).
 4.  **Posizionamento & Unzip:**
-    *   **Per l'Ingestione (Membro 2):** Create `/data/corpus/` e spostateci dentro i file `.jsonl` estratti dagli zip (es. `govt.jsonl`).
-    *   **Per la Valutazione (Membro 5):** Copiate `human/generation_tasks/reference+RAG.jsonl` in `/dataset/reference+RAG.jsonl`.
-5.  **Verifica:** Assicuratevi che `ls data/corpus/` mostri i file JSONL.
+    *   **Per l'Ingestione (Membro 2):** I file `.jsonl` estratti devono trovarsi in `/dataset/corpora/` (folder `passage_level`).
+    *   **Per la Valutazione (Membro 5):** Copiate `human/generation_tasks/reference+RAG.jsonl` in `/dataset/human/generation_tasks/`.
+5.  **Verifica:** Assicuratevi che `ls dataset/corpora/passage_level/` mostri i file JSONL.
 
 > **NOTA IMPORTANTE:** Per iniziare, consigliamo di usare solo **uno** dei domini (es. `govt.jsonl`) per evitare tempi di indicizzazione biblici sulla T4.
 
@@ -73,12 +73,12 @@ Dettaglio Tecnico:
 Copiate questo contenuto in un file requirements.txt e lanciate pip install -r requirements.txt.
 
 ```
-# Orchestrazione e Grafo
-langchain==0.1.10
-langchain-community==0.0.25
-langchain-core==0.1.28
-langchain-huggingface==0.0.3
-langgraph==0.0.26
+# Orchestration & Grafo
+langchain
+langchain-community
+langchain-core
+langchain-huggingface
+langgraph
 
 # Local LLM & Quantization (CRITICO PER KAGGLE T4)
 torch
@@ -89,26 +89,26 @@ scipy
 huggingface_hub
 
 # Vector Store e Embeddings
-qdrant-client>=1.9.0
-langchain-qdrant>=0.1.0
-sentence-transformers==2.5.1
-rank_bm25==0.2.2
-faiss-cpu==1.8.0
+qdrant-client
+langchain-qdrant
+sentence-transformers
+rank_bm25
+faiss-cpu
 
 # Gestione Dati e Processing
-unstructured==0.12.5
-tiktoken==0.6.0
-pydantic==2.6.3
-numpy==1.26.4
-pandas==2.2.1
+unstructured
+tiktoken
+pydantic
+numpy
+pandas
 
 # Valutazione
-ragas==0.1.4
-datasets==2.18.0
+ragas
+datasets
 
 # Utility
-python-dotenv==1.0.1
-tqdm==4.66.2
+python-dotenv
+tqdm
 ```
 
 **Perché queste librerie specifiche?**
@@ -137,9 +137,11 @@ Organize the folders exactly like this:
 │   ├── __init__.py
 │   └── evaluate.py          # RAGAS evaluation pipeline
 ├── /notebooks               # Kaggle test notebooks
-│   ├── 01_data_ingestion.ipynb    # Data loading & vector store
-│   ├── 02_rag_pipeline.ipynb      # Self-CRAG workflow testing
-│   └── 03_evaluation.ipynb        # RAGAS metrics evaluation
+├── /notebooks               # Kaggle test notebooks
+│   ├── TaskA_Retrieval.ipynb      # Retrieval testing (Task A)
+│   ├── TaskB_Generation.ipynb     # Generation testing (Task B)
+│   ├── TaskC_RAG.ipynb            # Full RAG Pipeline (Task C)
+│   └── All_Tasks_Pipeline.ipynb   # Combined Workflow
 ├── /docs                    # Documentation
 │   └── implementation-guide.md
 ├── .env.example             # Environment template (copy to .env)
@@ -155,9 +157,11 @@ For testing on Kaggle, use the notebooks in `/notebooks`:
 
 | Notebook | Purpose |
 |----------|---------|
-| `01_data_ingestion.ipynb` | Load mtRAG data, apply Parent-Child chunking, build Qdrant vector store |
-| `02_rag_pipeline.ipynb` | Initialize Llama 3.1 4-bit, test Self-CRAG workflow, run multi-turn conversations |
-| `03_evaluation.ipynb` | Run RAGAS evaluation with local Llama judge, analyze IDK accuracy |
+| Notebook | Purpose |
+|----------|---------|
+| `TaskA_Retrieval.ipynb` | Load mtRAG data, apply Parent-Child chunking, build Qdrant vector store & test Retrieval |
+| `TaskB_Generation.ipynb` | Test Generation Logic (LLM, Rewriter, Graders) |
+| `TaskC_RAG.ipynb` | Full Self-CRAG workflow testing (Task C) |
 
 Each notebook includes:
 - `!pip install` cells for dependencies
@@ -269,7 +273,7 @@ def load_and_chunk_data(json_path: str):
     RICHIEDE: Il file corpus JSON presente in /data.
     """
     print(f"--- LOADING DATA FROM {json_path} ---") 
-    # ESEMPIO: json_path potrebbe essere "./data/corpus.json" o simile.
+    # ESEMPIO: json_path potrebbe essere "./dataset/corpora/passage_level/govt.jsonl" o simile.
     
     try:
         with open(json_path, 'r') as f:

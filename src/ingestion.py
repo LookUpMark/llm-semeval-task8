@@ -12,7 +12,7 @@ When a child chunk is retrieved, the parent content is returned to the LLM.
 import json
 import uuid
 from typing import List
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from langchain_community.embeddings import HuggingFaceEmbeddings
