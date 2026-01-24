@@ -98,12 +98,12 @@ def load_and_chunk_data(json_path: str):
     return docs_to_index
 
 
-def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db"):
+def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db", collection_name: str = "mtrag_collection"):
     """
     Crea e salva il database vettoriale Qdrant.
     """
     
-    print("--- BUILDING VECTOR STORE ---")
+    print(f"--- BUILDING VECTOR STORE: {collection_name} ---")
     # model_kwargs={'device': 'cuda'} forza l'uso della GPU per creare gli embeddings
     embedding_model = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
@@ -119,7 +119,7 @@ def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db"):
 
     # recreate = pulisce se esiste già
     client.recreate_collection(
-        collection_name="mtrag_collection",
+        collection_name=collection_name,
         vectors_config=VectorParams(
             size=embedding_model.client.get_sentence_embedding_dimension(),
             distance=Distance.COSINE
@@ -128,11 +128,17 @@ def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db"):
     
     vectorstore = QdrantVectorStore(
         client=client,
-        collection_name="mtrag_collection",
+        collection_name=collection_name,
         embedding=embedding_model,
     )
 
-    vectorstore.add_documents(docs)
+    batch_size = 64
+    print(f"   Adding {len(docs)} documents in batches of {batch_size}...")
+    
+    from tqdm import tqdm
+    for i in tqdm(range(0, len(docs), batch_size), desc="Indexing"):
+        batch = docs[i : i + batch_size]
+        vectorstore.add_documents(batch)
 
     print("--- VECTOR STORE BUILT AND SAVED ---")
     return vectorstore
