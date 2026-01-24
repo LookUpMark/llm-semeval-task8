@@ -157,6 +157,8 @@ app = None
 
 
 def initialize_graph():
-    """Initializes the graph. Call once at startup."""
+    """Initializes the graph. Call once at startup. Returns the compiled app."""
     global app
     app = build_graph()
+    return app
+
