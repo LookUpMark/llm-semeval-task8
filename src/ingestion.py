@@ -11,7 +11,7 @@ When a child chunk is retrieved, the parent content is returned to the LLM.
 
 import json
 import uuid
-from typing import List
+from typing import List, Optional
 from langchain_text_splitters  import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
@@ -19,11 +19,30 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from pathlib import Path
-
+from src.retrieval import get_qdrant_client
 
 # CONFIGURAZIONE
 # BGE-M3 è SOTA per retrieval denso e funziona bene su CPU/GPU modeste.
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
+
+# Singleton instances
+_embedding_model: Optional[HuggingFaceEmbeddings] = None
+
+
+def _get_embedding_model() -> HuggingFaceEmbeddings:
+    """Get or create singleton embedding model to save memory."""
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={
+                "batch_size": 16,
+                "normalize_embeddings": True
+            }
+        )
+    return _embedding_model
+
 
 def load_and_chunk_data(json_path: str):
     """
@@ -101,21 +120,15 @@ def load_and_chunk_data(json_path: str):
 def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db", collection_name: str = "mtrag_collection"):
     """
     Crea e salva il database vettoriale Qdrant.
+    Usa client singleton per evitare lock.
     """
     
     print(f"--- BUILDING VECTOR STORE: {collection_name} ---")
-    # model_kwargs={'device': 'cuda'} forza l'uso della GPU per creare gli embeddings
-    embedding_model = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={'device': 'cuda'},
-        encode_kwargs={
-            "batch_size": 16,
-            "normalize_embeddings": True
-        }
-    )
     
-    # Create Qdrant client with local persistence
-    client = QdrantClient(path=persist_dir)
+    # Singleton instances
+    embedding_model = _get_embedding_model()
+    # Use shared singleton client
+    client = get_qdrant_client(persist_dir)
 
     # recreate = pulisce se esiste già
     client.recreate_collection(

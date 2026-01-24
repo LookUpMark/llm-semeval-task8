@@ -5,11 +5,10 @@ Implements dense retrieval with cross-encoder reranking:
 - Base Retrieval: Vector search returning top 20 candidates (high recall)
 - Reranking: Cross-Encoder filters to top 5 (high precision)
 
-Uses BGE-M3 for embeddings and BGE-Reranker-v2-M3 for reranking.
-Hybrid dense+sparse retrieval is discussed theoretically, but not implemented due to framework constraints.
+Uses BGE-M3 for embeddings and a lightweight reranker for fast testing.
 """
 
-from typing import List, Any
+from typing import List, Any, Optional
 import torch
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
@@ -20,8 +19,48 @@ from langchain_classic.retrievers.document_compressors import CrossEncoderRerank
 
 # CONFIGURATION
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
-RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# Using lightweight reranker (~80MB) instead of BGE-Reranker-v2-M3 (2.2GB)
+RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# Use CPU for embeddings to save GPU memory for LLM
+EMBEDDING_DEVICE = "cpu"
+RERANKER_DEVICE = "cpu"
+
+# Module-level singletons to avoid lock conflicts
+_qdrant_client: Optional[QdrantClient] = None
+_embedding_model: Optional[HuggingFaceEmbeddings] = None
+_cross_encoder: Optional[HuggingFaceCrossEncoder] = None
+
+
+def get_qdrant_client(qdrant_path: str) -> QdrantClient:
+    """Get or create singleton Qdrant client."""
+    global _qdrant_client
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(path=qdrant_path)
+    return _qdrant_client
+
+
+def _get_embedding_model() -> HuggingFaceEmbeddings:
+    """Get or create singleton embedding model."""
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            model_kwargs={"device": EMBEDDING_DEVICE},
+            encode_kwargs={"normalize_embeddings": True}
+        )
+    return _embedding_model
+
+
+def _get_cross_encoder() -> HuggingFaceCrossEncoder:
+    """Get or create singleton cross-encoder."""
+    global _cross_encoder
+    if _cross_encoder is None:
+        print(f"🔧 Loading reranker: {RERANKER_MODEL_NAME}")
+        _cross_encoder = HuggingFaceCrossEncoder(
+            model_name=RERANKER_MODEL_NAME,
+            model_kwargs={"device": RERANKER_DEVICE}
+        )
+    return _cross_encoder
 
 
 def get_retriever(
@@ -33,6 +72,8 @@ def get_retriever(
     """
     Returns an advanced retriever: Dense Vector Search -> Cross-Encoder Rerank.
     
+    Uses singleton clients to avoid Qdrant lock conflicts.
+    
     Args:
         qdrant_path: Path to Qdrant database directory.
         collection_name: Name of the Qdrant collection.
@@ -42,15 +83,11 @@ def get_retriever(
     Returns:
         ContextualCompressionRetriever with reranking.
     """
-    # Qdrant connection
-    client = QdrantClient(path=qdrant_path)
+    # Use singleton client (avoids lock issues)
+    client = get_qdrant_client(qdrant_path)
     
-    # Embedding model (BGE-M3 dense)
-    embedding_model = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={"device": DEVICE},
-        encode_kwargs={"normalize_embeddings": True}
-    )
+    # Use singleton embedding model
+    embedding_model = _get_embedding_model()
     
     # VectorStore: retrieval of top_k_retrieve documents (high recall)
     vectorstore = QdrantVectorStore(
@@ -60,11 +97,8 @@ def get_retriever(
     )
     base_retriever = vectorstore.as_retriever(search_kwargs={"k": top_k_retrieve})
     
-    # Cross-Encoder Reranker: filters top_k_rerank documents (high precision)
-    cross_encoder = HuggingFaceCrossEncoder(
-        model_name=RERANKER_MODEL_NAME,
-        model_kwargs={"device": DEVICE}
-    )
+    # Use singleton cross-encoder
+    cross_encoder = _get_cross_encoder()
     compressor = CrossEncoderReranker(model=cross_encoder, top_n=top_k_rerank)
     
     # Final pipeline: Retriever + Reranker

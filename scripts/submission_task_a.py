@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+SemEval 2026 Task 8 - Task A: Retrieval
+Uses a UNIFIED collection for all domains.
+"""
 
 import os
 import sys
@@ -16,14 +21,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.ingestion import load_and_chunk_data, build_vector_store
-from src.retrieval import get_retriever
-from qdrant_client import QdrantClient
+from src.retrieval import get_retriever, get_qdrant_client
 
 # --- CONFIGURATION ---
 TEAM_NAME = "Gbgers"
-DOMAINS = ["govt", "clapnq", "fiqa", "cloud"]  # All domains
+DOMAINS = ["govt", "clapnq", "fiqa", "cloud"]
 TOP_K_RETRIEVE = 20
 TOP_K_RERANK = 5
+
+# UNIFIED COLLECTION NAME
+COLLECTION_NAME = "mtrag_unified"
 
 # TEST MODE: Set to True for quick verification
 TEST_MODE = True
@@ -40,11 +47,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- HELPER FUNCTIONS ---
 
-def extract_last_query(turns):
-    """Extract last user question from turns."""
-    for turn in reversed(turns):
-        if turn.get("role") == "user":
-            return turn.get("content", "")
+def extract_last_query(messages):
+    """Extract last user question from messages."""
+    for msg in reversed(messages):
+        if msg.get("speaker") == "user":
+            return msg.get("text", "")
     return ""
 
 def get_corpus_file(domain):
@@ -61,51 +68,72 @@ def get_corpus_file(domain):
             return None
     return jsonl_path
 
-def ensure_vector_store(domain):
-    """Ensure Qdrant collection exists for domain."""
-    collection_name = f"mtrag_{domain}"
-    corpus_path = get_corpus_file(domain)
+def build_unified_collection():
+    """Build a single unified Qdrant collection with all domains."""
     
-    if not corpus_path:
-        print(f"⚠️ Corpus not found for {domain}")
-        return None
-    
-    need_build = True
+    # Check if collection already exists
     if os.path.exists(QDRANT_PATH):
-        client = None
         try:
-            client = QdrantClient(path=QDRANT_PATH)
-            if client.collection_exists(collection_name):
-                info = client.get_collection(collection_name)
-                print(f"✅ Collection '{collection_name}' exists ({info.points_count} vectors)")
-                need_build = False
+            client = get_qdrant_client(QDRANT_PATH)
+            if client.collection_exists(COLLECTION_NAME):
+                info = client.get_collection(COLLECTION_NAME)
+                print(f"✅ Unified collection '{COLLECTION_NAME}' exists ({info.points_count} vectors)")
+                return True
         except Exception as e:
             print(f"⚠️ Warning checking collection: {e}")
-        finally:
-            if client:
-                client.close()  # Ensure lock is released
     
-    if need_build:
-        print(f"🔄 Building collection '{collection_name}' for {domain}...")
+    # Build unified collection
+    print(f"🔄 Building unified collection '{COLLECTION_NAME}' with all domains...")
+    all_docs = []
+    
+    for domain in DOMAINS:
+        corpus_path = get_corpus_file(domain)
+        if not corpus_path:
+            print(f"⚠️ Corpus not found for {domain}, skipping...")
+            continue
+        
+        print(f"📂 Loading {domain}...")
         docs = load_and_chunk_data(corpus_path)
         
+        # Add domain metadata to each document
+        for doc in docs:
+            doc.metadata["domain"] = domain
+        
         if TEST_MODE and len(docs) > TEST_SUBSET_SIZE:
-            print(f"✂️ TEST MODE: Slicing to first {TEST_SUBSET_SIZE} chunks (from {len(docs)}) ")
+            print(f"✂️ TEST MODE: Slicing {domain} to first {TEST_SUBSET_SIZE} chunks (from {len(docs)})")
             docs = docs[:TEST_SUBSET_SIZE]
-            
-        build_vector_store(docs, persist_dir=QDRANT_PATH, collection_name=collection_name)
-        print("✅ Built and saved")
+        
+        all_docs.extend(docs)
+        print(f"   Added {len(docs)} chunks from {domain}")
     
-    return collection_name
+    print(f"📊 Total documents to index: {len(all_docs)}")
+    build_vector_store(all_docs, persist_dir=QDRANT_PATH, collection_name=COLLECTION_NAME)
+    print("✅ Unified collection built and saved")
+    return True
 
 # --- MAIN EXECUTION ---
 
 def main():
     print(f"Processing domains: {DOMAINS}")
     if TEST_MODE:
-        print(f"⚠️ TEST MODE ACTIVE: Indexing only {TEST_SUBSET_SIZE} chunks, processing {TEST_QUERY_LIMIT} queries.")
+        print(f"⚠️ TEST MODE ACTIVE: Indexing only {TEST_SUBSET_SIZE} chunks per domain, processing {TEST_QUERY_LIMIT} queries per domain.")
 
-    # Load ALL conversations once
+    # 1. Build unified collection (once for all domains)
+    if not build_unified_collection():
+        print("❌ Failed to build unified collection. Exiting.")
+        return
+    
+    # 2. Initialize single retriever
+    print("🔍 Initializing unified retriever...")
+    retriever = get_retriever(
+        qdrant_path=QDRANT_PATH,
+        collection_name=COLLECTION_NAME,
+        top_k_retrieve=TOP_K_RETRIEVE,
+        top_k_rerank=TOP_K_RERANK
+    )
+    print("✅ Retriever ready")
+
+    # 3. Load ALL conversations
     print("📂 Loading conversations...")
     with open(CONVERSATIONS_FILE, 'r') as f:
         all_conversations = json.load(f)
@@ -116,16 +144,7 @@ def main():
     for domain in DOMAINS:
         print(f"\n{'='*40}\n🌍 PROCESSING DOMAIN: {domain.upper()}\n{'='*40}")
         
-        # 1. Setup Vector Store
-        try:
-            collection_name = ensure_vector_store(domain)
-            if not collection_name:
-                continue
-        except Exception as e:
-            print(f"❌ Critical error setting up vector store for {domain}: {e}")
-            continue
-            
-        # 2. Filter Conversations (Substring matching)
+        # Filter Conversations (Substring matching)
         domain_convs = [
             c for c in all_conversations 
             if domain.lower() in c.get("domain", "").lower()
@@ -139,28 +158,21 @@ def main():
             print(f"✂️ TEST MODE: Processing only first {TEST_QUERY_LIMIT} conversations")
             domain_convs = domain_convs[:TEST_QUERY_LIMIT]
         
-        # 3. Init Retriever
-        retriever = get_retriever(
-            qdrant_path=QDRANT_PATH,
-            collection_name=collection_name,
-            top_k_retrieve=TOP_K_RETRIEVE,
-            top_k_rerank=TOP_K_RERANK
-        )
-        
-        # 4. Run Retrieval
+        # Run Retrieval (using same unified retriever)
         print(f"🚀 Running retrieval for {domain}...")
         for conv in tqdm(domain_convs):
-            query = extract_last_query(conv.get("turns", []))
+            messages = conv.get("messages", [])
+            query = extract_last_query(messages)
             if not query: 
                 continue
                 
             try:
                 docs = retriever.invoke(query)
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"Error: {e}\")
                 docs = []
                 
-            # Format
+            # Format output
             contexts = []
             for i, doc in enumerate(docs):
                 meta = doc.metadata
@@ -171,10 +183,10 @@ def main():
                 })
                 
             all_results.append({
-                "conversation_id": conv.get("conversation_id"),
-                "task_id": f"{conv.get('conversation_id')}::1",
+                "conversation_id": conv.get("author"),
+                "task_id": f"{conv.get('author')}::1",
                 "Collection": f"mt-rag-{domain}",
-                "input": [{"speaker": t["role"], "text": t["content"]} for t in conv["turns"]],
+                "input": [{"speaker": m["speaker"], "text": m["text"]} for m in messages],
                 "contexts": contexts
             })
 
