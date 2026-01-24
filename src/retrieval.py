@@ -14,9 +14,9 @@ import torch
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.retrievers import ContextualCompressionRetriever
-from langchain_community.retrievers import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_classic.retrievers import ContextualCompressionRetriever
+from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
 
 # CONFIGURATION
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
