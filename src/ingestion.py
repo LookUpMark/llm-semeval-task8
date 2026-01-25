@@ -131,10 +131,14 @@ def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db", 
     client = get_qdrant_client(persist_dir)
 
     # recreate = pulisce se esiste già
+    # Get embedding dimension by encoding a test string
+    test_embedding = embedding_model.embed_query("test")
+    embedding_dim = len(test_embedding)
+    
     client.recreate_collection(
         collection_name=collection_name,
         vectors_config=VectorParams(
-            size=embedding_model.client.get_sentence_embedding_dimension(),
+            size=embedding_dim,
             distance=Distance.COSINE
         )
     )
