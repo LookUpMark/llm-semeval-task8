@@ -19,7 +19,16 @@ from .generation import create_generation_components
 
 # Configuration
 MAX_RETRIES = 2
-QDRANT_PATH = "./qdrant_db"
+import os
+# Fix: Use absolute path for Qdrant to avoid issues when running from subdirectories (like tests/)
+if os.path.exists("src"):
+    PROJECT_ROOT = os.getcwd()
+elif os.path.exists("llm-semeval-task8"):
+    PROJECT_ROOT = os.path.join(os.getcwd(), "llm-semeval-task8")
+else:
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+QDRANT_PATH = os.path.join(PROJECT_ROOT, "qdrant_db")
 
 # Module-level components (initialized lazily)
 _components = None
@@ -40,20 +49,22 @@ def _get_retriever_for_domain(domain: str):
     """Get or create retriever for specific domain."""
     global _retriever, _current_domain
     
-    collection_name = f"mtrag_{domain}"
+    # SIMPLIFICATION: Use the UNIFIED collection for all domains
+    # This matches All_Tasks_Pipeline.ipynb logic
+    collection_name = "mtrag_unified"
     
-    # Reuse if same domain
-    if _retriever is not None and _current_domain == domain:
+    # Reuse if already initialized (regardless of domain, since it's unified)
+    if _retriever is not None:
         return _retriever
     
-    print(f"🔍 Initializing retriever for collection: {collection_name}")
+    print(f"🔍 Initializing unified retriever for collection: {collection_name}")
     _retriever = get_retriever(
         qdrant_path=QDRANT_PATH,
         collection_name=collection_name,
         top_k_retrieve=20,
         top_k_rerank=5
     )
-    _current_domain = domain
+    # _current_domain is no longer needed since we use one collection
     return _retriever
 
 
@@ -76,7 +87,7 @@ def rewrite_node(state: GraphState) -> dict:
     try:
         result = components.query_rewriter.invoke({
             "question": question,
-            "chat_history": chat_history
+            "messages": chat_history
         })
         standalone = result if isinstance(result, str) else str(result)
     except Exception as e:
