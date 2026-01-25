@@ -61,7 +61,7 @@ class GenerationComponents:
     hallucination_grader: Any
 
 
-def get_llama_pipeline(model_id="meta-llama/Meta-Llama-3.1-8B-Instruct") -> HuggingFacePipeline:
+def get_llama_pipeline(model_id="meta-llama/Llama-3.1-8B-Instruct") -> HuggingFacePipeline:
     """
     Configure Llama 3.1 at 4-bit for T4 GPU.
     
@@ -324,7 +324,7 @@ Answer: {generation}<|eot_id|>
     return prompt | llm | parser
 
 
-def create_generation_components(model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct") -> GenerationComponents:
+def create_generation_components(model_id: str = "meta-llama/Llama-3.1-8B-Instruct") -> GenerationComponents:
     """
     Factory function to create and configure all generation components.
     
