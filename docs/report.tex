@@ -130,7 +130,7 @@ A key design decision is making failures \textit{observable}. Every I\_DONT\_KNO
 
 We use RAGAS~\cite{ragas} for offline evaluation, employing Llama 3.1 8B as the judge model (no external APIs). The evaluation pipeline:
 \begin{enumerate}
-    \item Links generated submissions with ground truth from `conversations.json` via `original_index`.
+    \item Links generated submissions with ground truth from `conversations.json` via `original\_index`.
     \item Computes key metrics:
     \begin{itemize}
         \item \textbf{Faithfulness}: Grounding of answer in context.
@@ -257,32 +257,6 @@ Our 64\% answer rate demonstrates that carefully engineered open-source systems 
 \section*{Acknowledgment}
 This work was conducted as part of the Advanced Machine Learning course at Politecnico di Torino.
 
-\begin{thebibliography}{00}
 
-\bibitem{langgraph}
-LangChain, ``LangGraph: Build stateful, multi-actor applications with LLMs,'' \url{https://github.com/langchain-ai/langgraph}, 2024.
-
-\bibitem{bge-m3}
-J. Chen, S. Xiao, P. Zhang, K. Luo, D. Lian, and Z. Liu, ``BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation,'' \textit{arXiv preprint arXiv:2402.03216}, 2024.
-
-\bibitem{ragas}
-S. Es, J. James, L. Espinosa-Anke, and S. Schockaert, ``RAGAS: Automated Evaluation of Retrieval Augmented Generation,'' \textit{arXiv preprint arXiv:2309.15217}, 2023.
-
-\bibitem{selfrag}
-A. Asai, Z. Wu, Y. Wang, A. Sil, and H. Hajishirzi, ``Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection,'' \textit{arXiv preprint arXiv:2310.11511}, 2023.
-
-\bibitem{crag}
-S.-C. Yan, S.-A. Gu, Y. Huo, W.-C. Ma, and H. Yu, ``Corrective Retrieval Augmented Generation,'' \textit{arXiv preprint arXiv:2401.15884}, 2024.
-
-\bibitem{llama3}
-Meta AI, ``Llama 3: Open Foundation and Fine-Tuned Language Models,'' \url{https://ai.meta.com/llama/}, 2024.
-
-\bibitem{qdrant}
-Qdrant, ``Qdrant: High-performance vector search database,'' \url{https://qdrant.tech/}, 2024.
-
-\bibitem{bitsandbytes}
-T. Dettmers, M. Lewis, Y. Belkada, and L. Zettlemoyer, ``LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale,'' \textit{arXiv preprint arXiv:2208.07339}, 2022.
-
-\end{thebibliography}
 
 \end{document}
