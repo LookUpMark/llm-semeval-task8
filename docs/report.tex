@@ -209,22 +209,25 @@ The switch to Llama 3.1 8B significantly improved the document grader's recall, 
 
 \subsection{Qualitative Case Studies}
 
-We conducted a manual inspection of randomly sampled conversations to contextualize the quantitative metrics. The following examples illustrate the system's behaviors:
+We conducted a manual inspection of randomly sampled conversations to contextualize the quantitative metrics. Table \ref{tab:qualitative} highlights three representative cases:
 
-\paragraph{Success Case: Multi-Hop Reasoning (ID: govt\_4)}
-\textit{User:} ``Are they all by us?'' (referring to Mars missions mentioned in context)\\
-\textit{System Answer:} ``No, not all the mentioned missions... joint effort between NASA ... and ESA...''\\
-\textit{Analysis:} The system successfully resolved the coreference ``they'' and ``us'' (US/NASA) using the history, retrieved relevant documents about international collaboration, and synthesized a correct answer. This demonstrates the effectiveness of the Rewrite-Retrieve-Generate pipeline.
-
-\paragraph{Safe Failure: Ambiguity Handling (ID: govt\_7)}
-\textit{User:} ``Can a 17 year old be the defendant in a claim?''\\
-\textit{System Outcome:} \texttt{hallucination\_loop\_exhausted} (Fallback to I\_DONT\_KNOW)\\
-\textit{Analysis:} The ground truth answer for this query states: ``It is unclear, however the plaintiff must be at least 18...'' The system, unable to find a definitive ``yes/no'' in the retrieved documents, repeatedly attempted to generate an answer but failed the hallucination check. Rather than fabricating a legal fact, it correctly fell back. This confirms the safety mechanism prevents confidently wrong answers in high-stakes domains.
-
-\paragraph{Retrieval Limit: Short Query (ID: clapnq\_4)}
-\textit{User:} ``secondary source''\\
-\textit{System Outcome:} \texttt{irrelevant\_docs} (Fallback to I\_DONT\_KNOW)\\
-\textit{Analysis:} The user provided a keyword-only query late in the conversation. The Rewriter failed to expand it sufficiently for the dense retriever to find high-score matches, leading the Grader to reject all documents. This highlights a limitation in handling extremely telegraphic user inputs, suggesting potential future work on more aggressive query expansion.
+\begin{table}[htbp]
+\caption{Qualitative Analysis of Representative Interactions}
+\begin{center}
+\begin{tabular}{|p{0.12\linewidth}|p{0.13\linewidth}|p{0.35\linewidth}|p{0.32\linewidth}|}
+\hline
+\textbf{ID} & \textbf{Type} & \textbf{Interaction} & \textbf{Analysis} \\
+\hline
+govt\_4 & Success & \textbf{Q}: ``Are they all by us?'' (referenced Mars missions) \newline \textbf{A}: ``No... joint effort between NASA ... and ESA...'' & Resolved coreference correctly using context history; retrieved ESA collaboration info. \\
+\hline
+govt\_7 & Safe Failure & \textbf{Q}: ``Can a 17 year old be the defendant in a claim?'' \newline \textbf{A}: \texttt{hallucination\_loop\_exhausted} (I\_DONT\_KNOW) & Ground truth states ``It is unclear''. System correctly avoided fabricating a definitive answer. \\
+\hline
+clapnq\_4 & Retrieval Limit & \textbf{Q}: ``secondary source'' \newline \textbf{A}: \texttt{irrelevant\_docs} (I\_DONT\_KNOW) & Short, keyword-only query. Rewriter/Retriever failed to capture sufficient context. \\
+\hline
+\end{tabular}
+\label{tab:qualitative}
+\end{center}
+\end{table}
 
 \section{Ablation Studies and Discussion}
 
