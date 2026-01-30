@@ -74,7 +74,7 @@ All documents are indexed in a unified Qdrant collection with domain metadata at
 
 Dense retrieval using bi-encoders is fast but imprecise: the query and documents are embedded independently, limiting the model's ability to capture fine-grained semantic relationships. Cross-encoders provide more accurate relevance scoring by jointly encoding the query-document pair, but are computationally expensive and non-parallelizable.
 
-We combine both approaches in a \textbf{two-stage retrieval pipeline}. First, we use \textbf{BGE-M3}~\cite{bge-m3} embeddings to retrieve the top-20 candidate documents via fast approximate nearest neighbor search. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations.
+We combine both approaches in a \textbf{two-stage retrieval pipeline}. First, we use \textbf{BGE-M3} embeddings to retrieve the top-20 candidate documents via fast approximate nearest neighbor search. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations.
 
 Second, the \textbf{BGE-reranker-v2-m3} cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the top-5 most relevant documents for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
 
@@ -82,7 +82,7 @@ To maximize GPU memory for the LLM, both the embedding model and reranker run on
 
 \subsection{Module: Graph Orchestration (src/graph.py)}
 
-We implement a \textbf{cyclic agentic graph} using LangGraph~\cite{langgraph}, moving beyond fragile linear pipelines.
+We implement a \textbf{cyclic agentic graph} using LangGraph, moving beyond fragile linear pipelines.
 
 \subsubsection{Workflow Logic}
 The graph consists of seven interconnected nodes:
@@ -117,9 +117,9 @@ This transformation is critical: retrieval quality depends entirely on the query
 \subsubsection{Self-Correction Mechanisms}
 The core innovation of our architecture is the integration of two complementary verification stages from recent RAG literature.
 
-\textbf{Corrective RAG (CRAG)}~\cite{crag} addresses retrieval failures. Before passing documents to the generator, each retrieved document is evaluated for relevance using a binary grader. Documents deemed irrelevant are filtered out. If no relevant documents remain after filtering, the system immediately falls back---there is no point generating an answer with irrelevant context.
+\textbf{Corrective RAG (CRAG)} addresses retrieval failures. Before passing documents to the generator, each retrieved document is evaluated for relevance using a binary grader. Documents deemed irrelevant are filtered out. If no relevant documents remain after filtering, the system immediately falls back---there is no point generating an answer with irrelevant context.
 
-\textbf{Self-RAG}~\cite{selfrag} addresses generation failures. After the LLM produces an answer, a hallucination grader evaluates whether the answer is actually supported by the source documents. We deliberately use a permissive criterion: answers are acceptable if their main claims can be \textit{found in or reasonably inferred from} the documents. Only clear fabrications---wrong dates, invented names, factual contradictions---trigger a ``no'' score.
+\textbf{Self-RAG} addresses generation failures. After the LLM produces an answer, a hallucination grader evaluates whether the answer is actually supported by the source documents. We deliberately use a permissive criterion: answers are acceptable if their main claims can be \textit{found in or reasonably inferred from} the documents. Only clear fabrications---wrong dates, invented names, factual contradictions---trigger a ``no'' score.
 
 When hallucination is detected, the system does not immediately give up. Instead, it loops back to the Generate node, attempting regeneration up to two times. This retry mechanism captures cases where the LLM initially produces a flawed response but can self-correct given another chance. Only after exhausting retries does the system fall back gracefully.
 
@@ -128,7 +128,7 @@ A key design decision is making failures \textit{observable}. Every I\_DONT\_KNO
 
 \subsection{Module: Evaluation (eval/evaluate.py)}
 
-We use RAGAS~\cite{ragas} for offline evaluation, employing Llama 3.1 8B as the judge model (no external APIs). The evaluation pipeline:
+We use RAGAS for offline evaluation, employing Llama 3.1 8B as the judge model (no external APIs). The evaluation pipeline:
 \begin{enumerate}
     \item Links generated submissions with ground truth from `conversations.json` via `original\_index`.
     \item Computes key metrics:
