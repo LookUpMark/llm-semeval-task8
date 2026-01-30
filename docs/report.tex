@@ -209,25 +209,34 @@ The switch to Llama 3.1 8B significantly improved the document grader's recall, 
 
 \subsection{Qualitative Case Studies}
 
-We conducted a manual inspection of randomly sampled conversations to contextualize the quantitative metrics. Table \ref{tab:qualitative} highlights three representative cases:
+To contextualize the quantitative metrics, we analyze specific interaction patterns. Table \ref{tab:qualitative} summarizes three representative cases, while the subsequent paragraphs provide a detailed fluid analysis of the system's reasoning and behavior in each scenario.
 
 \begin{table}[htbp]
 \caption{Qualitative Analysis of Representative Interactions}
 \begin{center}
-\begin{tabular}{|p{0.12\linewidth}|p{0.13\linewidth}|p{0.35\linewidth}|p{0.32\linewidth}|}
-\hline
-\textbf{ID} & \textbf{Type} & \textbf{Interaction} & \textbf{Analysis} \\
-\hline
-govt\_4 & Success & \textbf{Q}: ``Are they all by us?'' (referenced Mars missions) \newline \textbf{A}: ``No... joint effort between NASA ... and ESA...'' & Resolved coreference correctly using context history; retrieved ESA collaboration info. \\
-\hline
-govt\_7 & Safe Failure & \textbf{Q}: ``Can a 17 year old be the defendant in a claim?'' \newline \textbf{A}: \texttt{hallucination\_loop\_exhausted} (I\_DONT\_KNOW) & Ground truth states ``It is unclear''. System correctly avoided fabricating a definitive answer. \\
-\hline
-clapnq\_4 & Retrieval Limit & \textbf{Q}: ``secondary source'' \newline \textbf{A}: \texttt{irrelevant\_docs} (I\_DONT\_KNOW) & Short, keyword-only query. Rewriter/Retriever failed to capture sufficient context. \\
-\hline
+\begin{tabular}{lp{0.25\linewidth}p{0.55\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Outcome} & \textbf{Interaction Summary} \\
+\midrule
+govt\_4 & Success & \textbf{Q}: ``Are they all by us?'' (Mars missions) \newline \textbf{A}: Correctly identifies international collaboration (ESA). \\
+\midrule
+govt\_7 & Safe Failure & \textbf{Q}: ``Can a 17 year old be the defendant?'' \newline \textbf{A}: Fallback to I\_DONT\_KNOW due to ambiguity. \\
+\midrule
+clapnq\_4 & Retrieval Limit & \textbf{Q}: ``secondary source'' \newline \textbf{A}: Fallback due to insufficient query context. \\
+\bottomrule
 \end{tabular}
 \label{tab:qualitative}
 \end{center}
 \end{table}
+
+\paragraph{Success Case: Multi-Hop Reasoning (ID: govt\_4)}
+The user asked ``Are they all by us?'', referring to Mars missions mentioned in the previous turn. The system successfully resolved the coreference ``they'' to the missions and ``us'' to the United States/NASA. By retrieving documents describing international collaborations, it synthesized a correct answer acknowledging the European Space Agency's role. This demonstrates the effectiveness of the Rewrite-Retrieve-Generate pipeline in handling context-dependent queries.
+
+\paragraph{Safe Failure: Ambiguity Handling (ID: govt\_7)}
+When asked ``Can a 17 year old be the defendant in a claim?'', the system returned \texttt{hallucination\_loop\_exhausted} (I\_DONT\_KNOW). The ground truth answer for this query admits ``It is unclear''. The system, unable to find a definitive ``yes'' or ``no'' in the retrieved legal documents, repeatedly attempted to generate an answer but failed the hallucination check. Rather than fabricating a legal fact, it correctly fell back, confirming that the hallucination grader effectively prevents confidently wrong answers in high-stakes domains.
+
+\paragraph{Retrieval Limit: Short Query (ID: clapnq\_4)}
+The user provided a generic, keyword-only query: ``secondary source''. The Rewriter failed to expand this into a distinct question, and the dense retriever failed to find documents exceeding the relevance threshold. This case highlights a limitation in handling extremely telegraphic user inputs and suggests a need for more aggressive query expansion strategies to bridge the gap between keyword search and semantic retrieval.
 
 \section{Ablation Studies and Discussion}
 
