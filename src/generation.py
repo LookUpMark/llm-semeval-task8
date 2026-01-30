@@ -28,7 +28,7 @@ class GenerationComponents:
     hallucination_grader: Any
 
 
-def get_llama_pipeline(model_id="meta-llama/Llama-3.2-3B-Instruct") -> HuggingFacePipeline:
+def get_llama_pipeline(model_id="meta-llama/Llama-3.1-8B-Instruct") -> HuggingFacePipeline:
     """Configure Llama with 4-bit NF4 quantization for GPU."""
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True, bnb_4bit_use_double_quant=True,
@@ -213,7 +213,7 @@ Answer: {generation}<|eot_id|>
             | llm | JsonOutputParser(pydantic_object=GradeHallucinations))
 
 
-def create_generation_components(model_id: str = "meta-llama/Llama-3.2-3B-Instruct") -> GenerationComponents:
+def create_generation_components(model_id: str = "meta-llama/Llama-3.1-8B-Instruct") -> GenerationComponents:
     """Factory: creates quantized LLM and all chains (rewriter, generator, graders)."""
     print(f"Creating Generation Components with model: {model_id}...")
     llm = get_llama_pipeline(model_id=model_id)

@@ -24,7 +24,7 @@
 \maketitle
 
 \begin{abstract}
-We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.2 3B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 58\% answer rate with detailed failure attribution across four categories: irrelevant documents, hallucination loops, and LLM refusals. All components are fully reproducible using only open-source tools.
+We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 58\% answer rate with detailed failure attribution across four categories: irrelevant documents, hallucination loops, and LLM refusals. All components are fully reproducible using only open-source tools.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -94,7 +94,7 @@ To maximize GPU memory for the LLM, both the embedding model and reranker run on
 
 \subsection{Generative Pipeline and Flow Control}
 
-Running large language models on consumer hardware requires aggressive optimization. We employ \textbf{Llama 3.2 3B Instruct} with 4-bit NF4 quantization via bitsandbytes, reducing memory requirements from approximately 6GB to 2GB. This enables the full model to fit on a single GPU while reserving capacity for the retrieval components.
+Running large language models on consumer hardware requires aggressive optimization. We employ \textbf{Llama 3.1 8B Instruct} with 4-bit NF4 quantization via bitsandbytes, reducing memory requirements from approximately 16GB to 6GB. This enables the full model to fit on a single GPU while reserving capacity for the retrieval components.
 
 \subsubsection{Query Rewriting}
 Multi-turn conversations introduce ambiguity through coreferences and ellipses. A user asking ``How much does it cost?'' after discussing a specific product expects the system to understand the implicit referent. Our \textbf{Rewrite} node addresses this through few-shot prompted coreference resolution, transforming context-dependent queries into standalone questions that the retriever can process independently:
@@ -126,7 +126,7 @@ Our system is designed to run on consumer-grade GPUs with limited VRAM. Key comp
 \begin{itemize}
     \item \textbf{Orchestration}: LangGraph for cyclic graph execution
     \item \textbf{Vector Store}: Qdrant with local persistence
-    \item \textbf{LLM}: Llama 3.2 3B with 4-bit NF4 quantization (bitsandbytes)
+    \item \textbf{LLM}: Llama 3.1 8B with 4-bit NF4 quantization (bitsandbytes)
     \item \textbf{Embeddings}: BGE-M3 via sentence-transformers
     \item \textbf{Evaluation}: RAGAS framework
 \end{itemize}
@@ -145,7 +145,7 @@ We indexed approximately 100,000 document chunks across all domains in a unified
 \section{Evaluation and Results}
 
 \subsection{Evaluation Protocol}
-We use RAGAS~\cite{ragas} with the same Llama 3.2 3B as judge (no external APIs). Metrics computed:
+We use RAGAS~\cite{ragas} with the same Llama 3.1 8B as judge (no external APIs). Metrics computed:
 \begin{itemize}
     \item \textbf{Faithfulness}: Is the answer grounded in context?
     \item \textbf{Answer Relevancy}: Does the answer address the question?
@@ -221,7 +221,7 @@ Compared to flat chunking (400 chars), Parent-Child chunking:
 \subsection{Limitations}
 \begin{enumerate}
     \item \textbf{Corpus Coverage}: 32/46 failures stem from missing information in the corpus, not system errors
-    \item \textbf{Model Size}: Llama 3.2 3B shows limited reasoning compared to larger models
+    \item \textbf{Model Size}: Llama 3.1 8B shows limited reasoning compared to larger models
     \item \textbf{Evaluation Bias}: Using the same model for generation and RAGAS evaluation introduces optimistic bias
 \end{enumerate}
 
