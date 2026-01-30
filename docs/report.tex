@@ -206,6 +206,26 @@ llm\_refusal & 12 \\
 
 The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
 
+
+\subsection{Qualitative Case Studies}
+
+We conducted a manual inspection of randomly sampled conversations to contextualize the quantitative metrics. The following examples illustrate the system's behaviors:
+
+\paragraph{Success Case: Multi-Hop Reasoning (ID: govt\_4)}
+\textit{User:} ``Are they all by us?'' (referring to Mars missions mentioned in context)\\
+\textit{System Answer:} ``No, not all the mentioned missions... joint effort between NASA ... and ESA...''\\
+\textit{Analysis:} The system successfully resolved the coreference ``they'' and ``us'' (US/NASA) using the history, retrieved relevant documents about international collaboration, and synthesized a correct answer. This demonstrates the effectiveness of the Rewrite-Retrieve-Generate pipeline.
+
+\paragraph{Safe Failure: Ambiguity Handling (ID: govt\_7)}
+\textit{User:} ``Can a 17 year old be the defendant in a claim?''\\
+\textit{System Outcome:} \texttt{hallucination\_loop\_exhausted} (Fallback to I\_DONT\_KNOW)\\
+\textit{Analysis:} The ground truth answer for this query states: ``It is unclear, however the plaintiff must be at least 18...'' The system, unable to find a definitive ``yes/no'' in the retrieved documents, repeatedly attempted to generate an answer but failed the hallucination check. Rather than fabricating a legal fact, it correctly fell back. This confirms the safety mechanism prevents confidently wrong answers in high-stakes domains.
+
+\paragraph{Retrieval Limit: Short Query (ID: clapnq\_4)}
+\textit{User:} ``secondary source''\\
+\textit{System Outcome:} \texttt{irrelevant\_docs} (Fallback to I\_DONT\_KNOW)\\
+\textit{Analysis:} The user provided a keyword-only query late in the conversation. The Rewriter failed to expand it sufficiently for the dense retriever to find high-score matches, leading the Grader to reject all documents. This highlights a limitation in handling extremely telegraphic user inputs, suggesting potential future work on more aggressive query expansion.
+
 \section{Ablation Studies and Discussion}
 
 \subsection{Impact of Domain Filtering}
