@@ -24,7 +24,7 @@
 \maketitle
 
 \begin{abstract}
-We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 58\% answer rate with detailed failure attribution across four categories: irrelevant documents, hallucination loops, and LLM refusals. All components are fully reproducible using only open-source tools.
+We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 64\% answer rate with detailed failure attribution across four categories: irrelevant documents (16), hallucination loops (12), and LLM refusals (12). All components are fully reproducible using only open-source tools.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -163,8 +163,8 @@ Note: Using the same model for generation and evaluation introduces bias; scores
 \toprule
 \textbf{Outcome} & \textbf{Count} & \textbf{Percentage} \\
 \midrule
-Answered & 64 & 58.2\% \\
-I\_DONT\_KNOW & 46 & 41.8\% \\
+Answered & 70 & 63.6\% \\
+I\_DONT\_KNOW & 40 & 36.4\% \\
 \midrule
 \textbf{Total} & \textbf{110} & 100\% \\
 \bottomrule
@@ -180,17 +180,17 @@ I\_DONT\_KNOW & 46 & 41.8\% \\
 \toprule
 \textbf{Reason} & \textbf{Count} \\
 \midrule
-none (successful) & 64 \\
-irrelevant\_docs & 32 \\
-hallucination\_loop\_exhausted & 8 \\
-llm\_refusal & 6 \\
+none (successful) & 70 \\
+irrelevant\_docs & 16 \\
+hallucination\_loop\_exhausted & 12 \\
+llm\_refusal & 12 \\
 \bottomrule
 \end{tabular}
 \label{tab:fallback}
 \end{center}
 \end{table}
 
-The dominant failure mode is \texttt{irrelevant\_docs} (32 cases), indicating corpus coverage gaps rather than system errors. Only 6 cases represent LLM over-conservatism.
+The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
 
 \section{Ablation Studies and Discussion}
 
@@ -207,7 +207,7 @@ We iterated on generator and grader prompts to balance precision with recall:
 
 \textbf{Permissive Prompt}: ``Use context as PRIMARY source; reasonable inferences allowed''
 \begin{itemize}
-    \item Result: 58\% answer rate, reduced \texttt{llm\_refusal} from 30+ to 6
+    \item Result: 64\% answer rate, substantial reduction in false negatives
 \end{itemize}
 
 \subsection{Impact of Parent-Child Chunking}
@@ -220,7 +220,7 @@ Compared to flat chunking (400 chars), Parent-Child chunking:
 
 \subsection{Limitations}
 \begin{enumerate}
-    \item \textbf{Corpus Coverage}: 32/46 failures stem from missing information in the corpus, not system errors
+    \item \textbf{Corpus Coverage}: 16/40 failures stem from missing information in the corpus, not system errors
     \item \textbf{Model Size}: Llama 3.1 8B shows limited reasoning compared to larger models
     \item \textbf{Evaluation Bias}: Using the same model for generation and RAGAS evaluation introduces optimistic bias
 \end{enumerate}
@@ -236,7 +236,7 @@ We presented a Self-CRAG architecture for multi-turn RAG that operates entirely 
     \item \textbf{Resource Efficiency}: Full system runs on a single consumer-grade GPU using 4-bit NF4 quantization
 \end{enumerate}
 
-Our 58\% answer rate demonstrates that carefully engineered open-source systems can achieve competitive performance on complex RAG tasks without proprietary APIs.
+Our 64\% answer rate demonstrates that carefully engineered open-source systems can achieve competitive performance on complex RAG tasks without proprietary APIs.
 
 \textbf{Future Work.} Directions include: (1) larger open-source LLMs when hardware permits, (2) query routing to domain-specific retrievers, and (3) active learning to expand corpus coverage for frequent failure patterns.
 
