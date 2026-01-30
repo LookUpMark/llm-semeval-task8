@@ -1,4 +1,4 @@
-"""Generation Module: Llama 3.1 with 4-bit quantization for RAG + grading chains."""
+"""Generation Module: Llama 3.2 with 4-bit quantization for RAG + grading chains."""
 
 import torch
 from typing import Any, List, Tuple
@@ -29,7 +29,7 @@ class GenerationComponents:
 
 
 def get_llama_pipeline(model_id="meta-llama/Llama-3.2-3B-Instruct") -> HuggingFacePipeline:
-    """Configure Llama 3.1 with 4-bit NF4 quantization for T4 GPU."""
+    """Configure Llama with 4-bit NF4 quantization for GPU."""
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True, bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16
