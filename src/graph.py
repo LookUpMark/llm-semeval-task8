@@ -28,13 +28,21 @@ def _get_components():
 
 
 def _get_retriever_for_domain(domain: str):
-    """Returns unified retriever (single collection for all domains)."""
+    """Returns retriever filtered by domain. Cached per-domain."""
     global _retriever
     if _retriever is None:
-        print("Initializing unified retriever for collection: mtrag_unified")
-        _retriever = get_retriever(qdrant_path=QDRANT_PATH, collection_name="mtrag_unified", 
-                                   top_k_retrieve=20, top_k_rerank=5)
-    return _retriever
+        _retriever = {}  # Dict to cache retrievers per domain
+    
+    if domain not in _retriever:
+        print(f"Initializing retriever for domain: {domain}")
+        _retriever[domain] = get_retriever(
+            qdrant_path=QDRANT_PATH, 
+            collection_name="mtrag_unified", 
+            top_k_retrieve=20, 
+            top_k_rerank=5,
+            domain=domain
+        )
+    return _retriever[domain]
 
 
 # --- NODES ---
@@ -70,7 +78,7 @@ def grade_documents_node(state: GraphState) -> dict:
     documents, question = state.get("documents", []), state.get("standalone_question") or state.get("question", "")
     
     if not documents:
-        return {"documents_relevant": "no", "documents": []}
+        return {"documents_relevant": "no", "documents": [], "fallback_reason": "no_retrieved_docs"}
     
     relevant_docs = []
     for doc in documents:
@@ -83,7 +91,10 @@ def grade_documents_node(state: GraphState) -> dict:
             print(f"Grading error: {e}")
             relevant_docs.append(doc)  # Keep on error
     
-    return {"documents_relevant": "yes" if relevant_docs else "no", "documents": relevant_docs}
+    if relevant_docs:
+        return {"documents_relevant": "yes", "documents": relevant_docs, "fallback_reason": "none"}
+    else:
+        return {"documents_relevant": "no", "documents": [], "fallback_reason": "irrelevant_docs"}
 
 
 def generate_node(state: GraphState) -> dict:
@@ -94,10 +105,16 @@ def generate_node(state: GraphState) -> dict:
     
     try:
         result = components.generator.invoke({"context": context, "question": question})
-        return {"generation": result if isinstance(result, str) else str(result)}
+        generation = result if isinstance(result, str) else str(result)
+        
+        fallback_reason = "none"
+        if "I_DONT_KNOW" in generation:
+            fallback_reason = "llm_refusal"
+            
+        return {"generation": generation, "fallback_reason": fallback_reason}
     except Exception as e:
         print(f"Generation failed: {e}")
-        return {"generation": "I_DONT_KNOW"}
+        return {"generation": "I_DONT_KNOW", "fallback_reason": "generation_error"}
 
 
 def hallucination_check_node(state: GraphState) -> dict:
@@ -105,7 +122,7 @@ def hallucination_check_node(state: GraphState) -> dict:
     components = _get_components()
     documents, generation = state.get("documents", []), state.get("generation", "")
     
-    if not documents or generation == "I_DONT_KNOW":
+    if not documents or "I_DONT_KNOW" in generation:
         return {"is_hallucination": "no"}
     
     try:
@@ -124,7 +141,11 @@ def increment_retry_node(state: GraphState) -> dict:
 
 
 def fallback_node(state: GraphState) -> dict:
-    return {"generation": "I_DONT_KNOW"}
+    """Returns I_DONT_KNOW with appropriate reason."""
+    reason = state.get("fallback_reason")
+    if not reason or reason == "none":
+        reason = "hallucination_loop_exhausted" if (state.get("is_hallucination") == "yes" and state.get("retry_count", 0) >= MAX_RETRIES) else "fallback_triggered"
+    return {"generation": "I_DONT_KNOW", "fallback_reason": reason}
 
 
 # --- CONDITIONAL EDGES ---

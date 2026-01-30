@@ -28,7 +28,7 @@ class GenerationComponents:
     hallucination_grader: Any
 
 
-def get_llama_pipeline(model_id="meta-llama/Llama-3.1-8B-Instruct") -> HuggingFacePipeline:
+def get_llama_pipeline(model_id="meta-llama/Llama-3.2-3B-Instruct") -> HuggingFacePipeline:
     """Configure Llama 3.1 with 4-bit NF4 quantization for T4 GPU."""
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True, bnb_4bit_use_double_quant=True,
@@ -38,7 +38,7 @@ def get_llama_pipeline(model_id="meta-llama/Llama-3.1-8B-Instruct") -> HuggingFa
     tokenizer.pad_token = tokenizer.eos_token
     
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, quantization_config=bnb_config, device_map="auto", trust_remote_code=True
+        model_id, quantization_config=bnb_config, device_map="cuda:0", trust_remote_code=True
     )
     pipe = pipeline(
         "text-generation", model=model, tokenizer=tokenizer,
@@ -94,28 +94,38 @@ Last Question: {question}<|eot_id|>
 
 
 def _create_generator(llm) -> Any:
-    """Creates the RAG generator chain with strict I_DONT_KNOW fallback."""
+    """Creates the RAG generator chain with balanced I_DONT_KNOW fallback."""
     template = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a strict assistant for a RAG task.
-Answer the user's question using EXCLUSIVELY the context provided below.
+You are a helpful assistant for a RAG task.
+Answer the user's question based on the context provided below.
+
+GUIDELINES:
+1. Use the context as your PRIMARY source of information.
+2. You MAY make reasonable inferences from the context if the answer is implied.
+3. Keep your answer concise and relevant to the question.
+4. If the context contains related information, use it to form an answer.
 
 ### EXAMPLES
-Context: The sky is blue. The grass is green.
+Context: The sky is blue during the day. At sunset, it turns orange and red.
 Question: What color is the sky?
-Answer: The sky is blue.
+Answer: The sky is blue during the day, but turns orange and red at sunset.
 
-Context: The capital of Italy is Rome. The Colosseum is in Rome.
-Question: Who is the President of France?
+Context: Apple was founded by Steve Jobs and Steve Wozniak in 1976 in a garage.
+Question: When was Apple founded?
+Answer: Apple was founded in 1976.
+
+Context: The Amazon rainforest produces 20% of Earth's oxygen.
+Question: What is the capital of Brazil?
 Answer: I_DONT_KNOW
 
-Context: Photosynthesis is the process used by plants to convert light into energy.
-Question: How do plants get energy?
-Answer: Plants get energy through a process called photosynthesis, which converts light into energy.
+Context: Electric cars use batteries instead of gasoline engines.
+Question: How do electric cars work?
+Answer: Electric cars work by using batteries instead of traditional gasoline engines.
 ### END EXAMPLES
 
-GOLDEN RULE:
-If the context does not contain the necessary information to answer, YOU MUST answer with: "I_DONT_KNOW".
-Do not try to guess. Do not use your internal knowledge.
+SAFETY RULE:
+Only respond with "I_DONT_KNOW" if the context is completely unrelated to the question.
+If the context contains ANY relevant information, use it to answer.
 
 CONTEXT:
 {context}<|eot_id|>
@@ -165,21 +175,31 @@ Document: {document}<|eot_id|>
 def _create_hallucination_grader(llm) -> Any:
     """Creates the hallucination grader (Self-RAG component)."""
     template = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts.
-Give a binary score 'yes' or 'no'. 'yes' means that the answer is fully supported by the set of facts.
-'no' means that the answer contains information that is not found in the documents (hallucination).
+You are a grader assessing whether an LLM answer is reasonably supported by the provided documents.
+Give a binary score 'yes' or 'no'.
+
+GRADING CRITERIA:
+- 'yes' = The answer's main claims can be found in OR reasonably inferred from the documents.
+- 'no' = The answer contains significant claims that directly contradict the documents OR are completely fabricated.
+
+BE PERMISSIVE: Minor elaborations, paraphrasing, and reasonable inferences are acceptable.
+Only mark 'no' for clear hallucinations (fabricated facts, wrong dates, invented names).
 
 ### EXAMPLES
-Documents: Apple was founded in 1976 by Steve Jobs, Steve Wozniak, and Ronald Wayne.
-Answer: Apple was founded in 1976.
+Documents: Apple was founded in 1976 by Steve Jobs, Steve Wozniak, and Ronald Wayne in California.
+Answer: Apple was founded in 1976 in California.
 Output: {{"binary_score": "yes"}}
 
 Documents: Apple was founded in 1976.
 Answer: Apple was founded in 1976 by Tim Cook.
 Output: {{"binary_score": "no"}}
 
-Documents: The sky is blue due to Rayleigh scattering.
-Answer: The sky is blue.
+Documents: Electric cars use batteries to power electric motors.
+Answer: Electric vehicles run on battery-powered electric motors instead of gasoline engines.
+Output: {{"binary_score": "yes"}}
+
+Documents: The Freedmen's Bureau helped formerly enslaved people after the Civil War.
+Answer: The Bureau assisted freed slaves with education, employment, and legal matters.
 Output: {{"binary_score": "yes"}}
 ### END EXAMPLES
 
@@ -193,7 +213,7 @@ Answer: {generation}<|eot_id|>
             | llm | JsonOutputParser(pydantic_object=GradeHallucinations))
 
 
-def create_generation_components(model_id: str = "meta-llama/Llama-3.1-8B-Instruct") -> GenerationComponents:
+def create_generation_components(model_id: str = "meta-llama/Llama-3.2-3B-Instruct") -> GenerationComponents:
     """Factory: creates quantized LLM and all chains (rewriter, generator, graders)."""
     print(f"Creating Generation Components with model: {model_id}...")
     llm = get_llama_pipeline(model_id=model_id)
