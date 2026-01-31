@@ -7,6 +7,16 @@
 
 This repository contains the implementation of a Self-Corrective Retrieval-Augmented Generation (Self-CRAG) system designed for the SemEval 2026 Task 8 challenge (Multi-Turn Retrieval-Augmented Generation). The project demonstrates a production-grade approach to complex question answering using local Large Language Models (LLMs) and advanced retrieval strategies.
 
+## Team Members
+
+*   **Marc'Antonio Lopez**
+*   **Filippo Simone Iannello**
+*   **Nicolò Colle**
+*   **Carmine Benvenuto**
+*   **Elia Cola**
+
+*Department of Control and Computer Engineering, Politecnico di Torino*
+
 ## System Architecture
 
 The core architecture is built upon LangGraph, orchestrating a cyclic state machine that enables the system to reflect on its own outputs and correct them dynamically.
@@ -111,11 +121,23 @@ To test individual modules without running the full pipeline, execute the notebo
 
 ## Evaluation
 
-The project includes an evaluation script using RAGAS to compute metrics such as Faithfulness, Answer Relevancy, and Context Precision.
+## Evaluation (Offline Judge)
+
+To rigorously validate the system without external APIs, we implemented a custom model-based evaluation framework.
+
+*   **Judge LLM**: `Qwen/Qwen2.5-14B-Instruct`
+*   **Metric**: Faithfulness and Refusal Justification (Model-Based)
+*   **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` for semantic similarity
+
+The evaluation logic is implemented in **`eval/evaluate.ipynb`** (primary source) and exposed via a CLI script:
 
 ```bash
-python eval/evaluate.py --submission data/submission_TaskC_Gbgers.jsonl
+PYTHONPATH=. .venv/bin/python eval/evaluate.py --submission data/submissions/submission_TaskC_Gbgers.jsonl
 ```
+
+This pipeline specifically evaluates:
+1.  **Refusal Accuracy**: Whether `I_DONT_KNOW` responses are justified by context absence.
+2.  **Faithfulness**: Whether generated answers are grounded in the retrieved documents (Self-RAG style).
 
 ## License
 

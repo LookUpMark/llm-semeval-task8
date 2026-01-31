@@ -18,13 +18,13 @@
 \author{
 \IEEEauthorblockN{Marc'Antonio Lopez\IEEEauthorrefmark{1}, Filippo Simone Iannello\IEEEauthorrefmark{1}, Nicolò Colle\IEEEauthorrefmark{1}, Carmine Benvenuto\IEEEauthorrefmark{1}, Elia Cola\IEEEauthorrefmark{1}}
 \IEEEauthorblockA{\IEEEauthorrefmark{1}\textit{Department of Control and Computer Engineering, Politecnico di Torino}, Torino, Italy\\
-\{s336362, s34520, s336406, s333307, s338009\}@studenti.polito.it}
+\{s336362, s345220, s336406, s333307, s338009\}@studenti.polito.it}
 }
 
 \maketitle
 
 \begin{abstract}
-We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 64\% answer rate with detailed failure attribution across four categories: irrelevant documents (16), hallucination loops (12), and LLM refusals (12). All components are fully reproducible using only open-source tools.
+We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. To ensure rigorous benchmarking without proprietary APIs, we implemented a custom model-based evaluation framework utilizing Qwen 2.5 14B as an offline judge to assess refusal accuracy and faithfulness. On the development set, we achieve a 64\% answer rate with detailed failure attribution across four categories: irrelevant documents (16), hallucination loops (12), and LLM refusals (12). All components are fully reproducible using only open-source tools.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -62,23 +62,36 @@ These constraints drive every technical decision: 4-bit quantization, CPU offloa
 
 \subsection{Module: Data Ingestion (src/ingestion.py)}
 
-A fundamental tension exists in RAG systems between retrieval precision and contextual completeness. Small chunks match user queries precisely but lack the surrounding context needed for coherent answers. Large chunks preserve context but introduce noise that degrades retrieval quality.
+The ingestion pipeline is designed to preserve semantic continuity while remaining efficient on constrained hardware. Rather than treating ingestion as a simple pre-processing step, we explicitly optimize it for multi-turn RAG, where context loss triggers broken coreference, retrieval drift, and hallucinations.
 
-We resolve this tension through a \textbf{Parent-Child chunking strategy}. Documents are first split into Parent chunks of approximately 1200 characters---large enough to contain complete semantic units like full paragraphs or sections. Each Parent is then subdivided into Child chunks of 400 characters, optimized for dense vector matching.
+\paragraph{Corpus processing and metadata preservation.}
+The mtRAG corpus is delivered as JSONL files across heterogeneous domains (finance, government, cloud). In \texttt{load\_and\_chunk\_data}, we parse each record and explicitly retain \texttt{title}, \texttt{url}, and \texttt{source} fields. These metadata are not archival: they are injected into the retrieval context to enable source-aware generation and improve Faithfulness. This choice avoids a common RAG anti-pattern where metadata is discarded early and cannot be surfaced at answer time.
 
-The key insight is that we \textit{search over children but generate from parents}. During indexing, each Child chunk stores its Parent's complete text in metadata. At query time, the retriever matches against the fine-grained Child embeddings, but the generator receives the broader Parent context. This achieves the best of both worlds: precise retrieval with coherent generation.
+\paragraph{Context fragmentation and the Parent-Child strategy.}
+A critical failure mode in standard RAG systems is \textit{context fragmentation}: small chunks maximize retrieval precision but often omit antecedents needed to resolve pronouns or ellipses (e.g., ``He signed the act'' without the subject). To address this, we implement \textbf{Parent-Child chunking} via \texttt{RecursiveCharacterTextSplitter}. Raw documents are first split into Parent chunks of \textbf{1200 characters with 100-character overlap}, sized to preserve coherent narrative units. Each Parent is then subdivided into Child chunks of \textbf{400 characters with 50-character overlap}, optimized for dense embedding models.
 
-All documents are indexed in a unified Qdrant collection with domain metadata attached to each chunk. This enables filtered retrieval: when processing a government conversation, we restrict search to government documents only. Without this filtering, we observed severe cross-domain contamination---a query about NASA's ``Europa Clipper'' retrieved financial documents about ``European markets'' due to semantic similarity in the word ``Europa.''
+The key design choice is to \textit{index children but retrieve parents}. We index Child embeddings in Qdrant, while storing the Parent content in metadata (\texttt{parent\_text}, \texttt{parent\_title}, \texttt{parent\_url}, \texttt{parent\_id}). At query time, a relevant Child chunk triggers retrieval of its Parent text, so the LLM receives a coherent block rather than a fragmented snippet. This hybrid approach couples high-recall vector search with generation-ready context.
+
+\paragraph{Vector representation and resource-aware storage.}
+Embeddings are computed with \textbf{BGE-M3} (\texttt{BAAI/bge-m3}), chosen for state-of-the-art dense retrieval and robustness to multi-granularity inputs. This capability is crucial because user questions are often short and synthetic (e.g., ``Who is the CEO?''), while Child chunks are longer and discursive. To prevent VRAM saturation during ingestion, we load the embedding model once (singleton pattern) and run encoding on CPU when necessary.
+
+All vectors are stored in a local Qdrant collection (\texttt{mtrag\_unified}) using \textbf{cosine similarity}. Each chunk carries domain metadata to support filtered retrieval, reducing cross-domain contamination (e.g., ``Europa'' in finance vs. NASA). Indexing is executed in batches for throughput stability, and the local persistence of Qdrant eliminates the overhead of a separate container during development.
 
 \subsection{Module: Retrieval (src/retrieval.py)}
 
 Dense retrieval using bi-encoders is fast but imprecise: the query and documents are embedded independently, limiting the model's ability to capture fine-grained semantic relationships. Cross-encoders provide more accurate relevance scoring by jointly encoding the query-document pair, but are computationally expensive and non-parallelizable.
 
-We combine both approaches in a \textbf{two-stage retrieval pipeline}. First, we use \textbf{BGE-M3} embeddings to retrieve the top-20 candidate documents via fast approximate nearest neighbor search. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations.
+We combine both approaches in a \textbf{two-stage retrieval pipeline} wrapped in LangChain's \texttt{ContextualCompressionRetriever}. First, we use \textbf{BGE-M3} (\texttt{BAAI/bge-m3}) embeddings to retrieve the \textbf{top-20 candidate documents} via fast approximate nearest neighbor search against Qdrant. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations with L2 normalization.
 
-Second, the \textbf{BGE-reranker-v2-m3} cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the top-5 most relevant documents for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
+Second, the \textbf{BGE-reranker-v2-m3} (\texttt{BAAI/bge-reranker-v2-m3}) cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the \textbf{top-5 most relevant documents} for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
 
-To maximize GPU memory for the LLM, both the embedding model and reranker run on CPU. This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
+\subsubsection{Domain Filtering}
+To prevent cross-domain contamination, the retriever applies a \textbf{Qdrant metadata filter} when a domain is specified. The filter uses a \texttt{FieldCondition} on \texttt{metadata.domain} with exact match semantics, ensuring that only documents from the target corpus are considered. This isolation is critical for multi-domain RAG systems.
+
+\subsubsection{Parent-Text Deduplication}
+Since multiple Child chunks may share the same Parent, the \texttt{format\_docs\_for\_gen()} function extracts unique parent texts from retrieved documents, preventing redundant context from inflating the prompt. This deduplication uses a set-based approach to guarantee each parent appears only once in the final context.
+
+To maximize GPU memory for the LLM, both the embedding model and reranker run on \textbf{CPU} (configured via \texttt{device='cpu'}). This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
 
 \subsection{Module: Graph Orchestration (src/graph.py)}
 
@@ -88,7 +101,7 @@ We implement a \textbf{cyclic agentic graph} using LangGraph, moving beyond frag
 The graph consists of seven interconnected nodes:
 \begin{enumerate}
     \item \textbf{Rewrite}: Transforms context-dependent queries (e.g., ``How much is it?'') into standalone questions by resolving coreferences.
-    \item \textbf{Retrieve}: Fetches top-20 candidates from filtered Qdrant vector store.
+    \item \textbf{Retrieve}: Fetches top-20 candidates from domain-filtered Qdrant vector store, then reranks to top-5 using cross-encoder scoring.
     \item \textbf{Grade Documents}: Implements CRAG (Corrective RAG) to discard irrelevant retrieved documents before generation.
     \item \textbf{Generate}: Produces answer using the LLM with filtered context.
     \item \textbf{Hallucination Check}: Implements Self-RAG to validate answer grounding against sources.
@@ -96,8 +109,10 @@ The graph consists of seven interconnected nodes:
     \item \textbf{Fallback}: Returns ``I\_DONT\_KNOW'' with diagnostic telemetry.
 \end{enumerate}
 
+The graph's cyclic nature emerges from intelligent routing decisions that distinguish between recoverable and terminal failures. After document grading, the system evaluates whether the retrieved context is sufficient: if relevant documents exist, processing continues to generation; if all documents are deemed irrelevant, the system immediately routes to fallback---there is no value in attempting generation without grounding. Similarly, after generating an answer, the hallucination checker determines the next action: grounded answers proceed to completion, while hallucinated responses trigger a retry loop that gives the model another opportunity to self-correct. Only after exhausting two regeneration attempts does the system concede defeat and return a diagnostic refusal.
+
 \subsubsection{State Management}
-The graph maintains a shared state (`GraphState`) flowing through all nodes, containing conversation history, questions, retrieved documents, and the `fallback\_reason` telemetry. This design decouples the workflow logic from the node implementations.
+The graph maintains a shared state object flowing through all nodes, capturing the complete trajectory of each query through the pipeline. This state accumulates not only the user's original question and the full conversation history, but also intermediate artifacts generated at each stage: the standalone reformulated query from the rewrite step, the retrieved documents and their relevance assessments, the generated answer, hallucination detection results, and a running retry counter. Most critically, the state tracks a diagnostic reason code that categorizes why the system chose to return I\_DONT\_KNOW rather than an answer. This stateful architecture decouples workflow orchestration from node implementations---each node receives the current state, performs its specialized function, and returns incremental updates that propagate forward through the graph.
 
 \subsection{Module: Generation (src/generation.py)}
 
@@ -124,20 +139,46 @@ The core innovation of our architecture is the integration of two complementary 
 When hallucination is detected, the system does not immediately give up. Instead, it loops back to the Generate node, attempting regeneration up to two times. This retry mechanism captures cases where the LLM initially produces a flawed response but can self-correct given another chance. Only after exhausting retries does the system fall back gracefully.
 
 \subsubsection{Fallback Telemetry}
-A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a \texttt{fallback\_reason} that categorizes the failure: \texttt{irrelevant\_docs} (retrieval failed), \texttt{llm\_refusal} (LLM was overly conservative), or \texttt{hallucination\_loop\_exhausted} (generation repeatedly hallucinated). This telemetry enables targeted debugging---prompt engineering to reduce LLM refusals, corpus expansion to address retrieval gaps, or model upgrades to reduce hallucinations.
+A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a diagnostic reason that categorizes the failure mode. In our pre-fix runs, the telemetry consistently reports three explicit scenarios: \texttt{irrelevant\_docs} (all retrieved documents fail relevance grading), \texttt{hallucination\_loop\_exhausted} (answers repeatedly fail grounding checks after retries), and \texttt{llm\_refusal} (the generator explicitly declines). Successful answers are labeled as \texttt{none}. This granular telemetry transforms opaque refusals into actionable debugging signals. A prevalence of relevance grading failures suggests the need for corpus expansion or better chunking strategies; frequent LLM refusals indicate overly conservative prompting that should be relaxed; repeated hallucination loop exhaustion points to fundamental model limitations that might require upgrading to a larger or better-tuned variant.
 
-\subsection{Module: Evaluation (eval/evaluate.py)}
+\subsection{Module: Evaluation (eval/evaluate.ipynb)}
+\label{sec:evaluation}
 
-We use RAGAS for offline evaluation, employing Llama 3.1 8B as the judge model (no external APIs). The evaluation pipeline:
-\begin{enumerate}
-    \item Links generated submissions with ground truth from `conversations.json` via `original\_index`.
-    \item Computes key metrics:
+To rigorously validate our architecture's effectiveness within a resource-constrained environment where ``hallucination is fatal,'' we developed a semi-deterministic offline evaluation pipeline. Unlike traditional lexical metrics (e.g., ROUGE or BLEU), which fail to capture factual consistency or the validity of a refusal, our system employs a hybrid \textit{Model-Based Evaluation} approach.
+
+The framework utilizes \textbf{Qwen2.5-14B-Instruct} as the \textit{Judge LLM}—selected for its superior reasoning capabilities over 7B/8B models—and \textbf{all-MiniLM-L6-v2} for efficient vector similarity calculations. The evaluation logic is bifurcated based on the agent's output:
+
+\paragraph{1) Refusal Accuracy Protocol}
+Given that the dataset contains unanswerable questions, the ability to correctly refuse is paramount. When the agent emits the \texttt{I\_DONT\_KNOW} token, the system triggers a specific routine (\texttt{evaluate\_refusal\_justification}) that does not penalize the absence of an answer but evaluates the \textbf{justification} of the refusal:
+\begin{itemize}
+    \item \textbf{Input:} User question and \textit{Retrieved Context}.
+    \item \textbf{Logic:} The Judge verifies if the context actually contained the necessary information.
+    \item \textbf{Scoring:}
     \begin{itemize}
-        \item \textbf{Faithfulness}: Grounding of answer in context.
-        \item \textbf{Answer Relevancy}: Relevance to the query.
-        \item \textbf{Context Precision}: Quality of retrieval.
+        \item \textit{Score 10 (Correct Refusal):} The context does NOT contain the answer. The refusal is validated.
+        \item \textit{Score 1 (False Negative):} The context CONTAINS the answer. The agent failed to recognize available information.
     \end{itemize}
+\end{itemize}
+In this scenario, the \textit{Correctness} metric is marked as ``N/A'' and the \textit{Hallucination} flag is automatically set to ``NO''.
+
+\paragraph{2) Answer Assessment Pipeline}
+When the agent produces a discursive response, evaluation proceeds along two parallel axes to measure both context adherence and semantic correctness:
+
+\textbf{a. Faithfulness \& Hallucination Detection:} The Judge evaluates solely if the response is supported by the retrieved documents, isolating the system from external knowledge leakage. The prompt enforces a structured JSON-like format extracting:
+\begin{itemize}
+    \item \textbf{Hallucination Flag:} A binary classifier (\texttt{YES}/\texttt{NO}) triggered if the response cites facts not present in the context.
+    \item \textbf{Score (1--10):} A scale that severely penalizes inventions (1--4) and rewards verified details (8--10).
+\end{itemize}
+
+\textbf{b. Hybrid Semantic Correctness:} To assess alignment with the \textit{Ground Truth} while reducing computational costs, we implement a two-stage approach:
+\begin{enumerate}
+    \item \textbf{Vector Shortcut:} We calculate Cosine Similarity (via MiniLM) between the generated answer and the Ground Truth. If similarity exceeds \textbf{0.95}, the system automatically assigns a score of \textbf{10/10}, assuming perfect semantic equivalence.
+    \item \textbf{LLM Grading:} Below this threshold, the \textit{Judge LLM} evaluates semantic correctness (1--10), distinguishing between factual errors (1--3), partial answers (4--6), and valid paraphrases (7--10).
 \end{enumerate}
+
+\paragraph{3) Robust Parsing \& Technical Implementation}
+The implementation addresses Qwen-specific behaviors, explicitly managing special stop tokens (e.g., \texttt{<|im\_end|>}) to prevent generative loops. Scores are extracted via \textbf{Regular Expressions (Regex)} that isolate the \texttt{Reasoning}, \texttt{Score}, and \texttt{Hallucination} fields from the model's Chain-of-Thought. To guarantee benchmark reliability, any parsing failure or runtime error triggers a \textit{pessimistic fallback} mechanism, assigning the minimum score (1.0) to prevent artificial performance inflation.
+
 
 \section{Experimental Setup}
 
@@ -148,7 +189,7 @@ Our system is designed to run on consumer-grade GPUs with limited VRAM. Key comp
     \item \textbf{Vector Store}: Qdrant with local persistence
     \item \textbf{LLM}: Llama 3.1 8B with 4-bit NF4 quantization (bitsandbytes)
     \item \textbf{Embeddings}: BGE-M3 via sentence-transformers
-    \item \textbf{Evaluation}: RAGAS framework
+    \item \textbf{Evaluation}: A custom offline pipeline leveraging \textbf{Qwen2.5-14B-Instruct} as the Judge and \textbf{all-MiniLM-L6-v2} for semantic similarity.
 \end{itemize}
 
 \subsection{Dataset}
@@ -204,7 +245,7 @@ llm\_refusal & 12 \\
 \end{center}
 \end{table}
 
-The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
+The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. \textbf{(Separate experiments; not part of the pre-fix run reported here.)} This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
 
 
 \subsection{Qualitative Case Studies}
@@ -238,6 +279,49 @@ When asked ``Can a 17 year old be the defendant in a claim?'', the system return
 \paragraph{Retrieval Limit: Short Query (ID: clapnq\_4)}
 The user provided a generic, keyword-only query: ``secondary source''. The Rewriter failed to expand this into a distinct question, and the dense retriever failed to find documents exceeding the relevance threshold. This case highlights a limitation in handling extremely telegraphic user inputs and suggests a need for more aggressive query expansion strategies to bridge the gap between keyword search and semantic retrieval.
 
+\subsection{Automated Evaluation Analysis (Judge-Based)}
+To validate the system's internal telemetry, we executed the offline evaluation pipeline described in Section~\ref{sec:evaluation} using \textbf{Qwen2.5-14B-Instruct}. The strict evaluation reveals a significant divergence between the agent's confidence and the judge's assessment. While the system achieved a 63.6\% answer rate, the granular analysis highlights the complexity of balancing "helpfulness" with strict factual adherence. The judge identified that while some refusals were false negatives, the system successfully avoided hallucination in cases where the context was legitimately completely missing, though it struggled with partial context matches.
+
+\subsection{Evaluation Results}
+In this section we analyze specific interaction patterns verified by the offline Judge. Table~\ref{tab:qualitative_examples} details five representative instances, juxtaposing the agent's output with the evaluator's reasoning.
+
+\begin{table*}[t]
+    \centering
+    \caption{Selected Rows from Evaluation Logs}
+    \label{tab:qualitative_examples}
+    \scriptsize
+    \begin{tabular}{p{0.07\linewidth} p{0.15\linewidth} p{0.22\linewidth} p{0.33\linewidth} p{0.05\linewidth} p{0.08\linewidth}}
+        \toprule
+        \textbf{ID} & \textbf{Question} & \textbf{Generated Answer} & \textbf{Judge Reasoning (Excerpt)} & \textbf{Score} & \textbf{Verdict} \\
+        \midrule
+        \texttt{clapnq\_14} & "How many teams?" & "The NFL consists of 32 teams, divided into two conferences: AFC and NFC, each with 16 teams." & "The answer accurately reflects the information... mentioning the division into two conferences... No hallucinations." & \textbf{10.0} & \textcolor{green}{Perfect Match} \\
+        \midrule
+        \texttt{fiqa\_8} & "Is interest taxable?" & "Yes, interest income is generally taxable and must be reported on your federal tax return." & "The answer correctly states that interest is taxable, but fails to mention the specific exemption for amounts under \$10 mentioned in Doc 2." & \textbf{7.0} & \textcolor{olive}{Partial Accuracy} \\
+        \midrule
+        \texttt{cloud\_3} & "Force restart command" & "I\_DONT\_KNOW" & "The retrieved context discusses graceful shutdown procedures but does not contain the specific force restart command requested. The refusal is justified." & \textbf{10.0} & \textcolor{green}{Valid Refusal} \\
+        \midrule
+        \texttt{govt\_1} & "Sollutions" & "Solving this issue is crucial for sending humans into the solar system. Better shielding is needed." & "The answer discusses solutions to protect astronauts from space radiation... The context talks about API operations. Completely unrelated." & \textbf{1.0} & \textcolor{red}{Severe Hallucination} \\
+        \midrule
+        \texttt{govt\_5} & "Fines and penalties" & "I\_DONT\_KNOW" & "The context contains information related to fines for improper facility use... It specifies fines for not abiding by organic waste requirements. The refusal is a False Negative." & \textbf{1.0} & \textcolor{orange}{Bad Refusal} \\
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+\paragraph{Precision Verification (\texttt{clapnq\_14})}
+This instance validates the system's end-to-end fidelity. The Judge assigns a maximum score of 10.0, confirming that the Parent-Child chunking strategy successfully preserved the numerical details required to answer the query without introducing extraneous noise.
+
+\paragraph{Granular Penalty for Omission (\texttt{fiqa\_8})}
+Unlike binary metrics, the Judge demonstrates nuanced scoring by assigning a 7.0. While the generated answer is factually correct in a broad sense, the evaluator penalizes the omission of a specific exemption found in the retrieved documents ("under \$10"). This highlights the framework's ability to distinguish between "helpful but incomplete" answers and hallucinations.
+
+\paragraph{True Negative Identification (\texttt{cloud\_3})}
+This case exemplifies a successful "Safe Refusal." The user requested a command absent from the documentation. Crucially, the Judge (having access to the same context) confirms the absence of the information, validating the agent's decision to fallback to \texttt{I\_DONT\_KNOW} as a correct architectural behavior rather than a failure.
+
+\paragraph{Domain Mismatch Detection (\texttt{govt\_1})}
+The Judge severely penalizes (Score 1.0) a case of "Knowledge Leakage." The agent, triggered by a vague query, ignored the retrieved technical context (API docs) to generate a response based on pre-training knowledge (space radiation). The evaluation pipeline correctly flags this as a hallucination, enforcing the strict "grounding-only" constraint required by the task.
+
+\paragraph{False Negative Attribution (\texttt{govt\_5})}
+Conversely to \texttt{cloud\_3}, here the Judge exposes a limitation in the 8B model's reasoning. Although the agent refused to answer, the 14B Judge successfully identified the relevant information ("improper facility use fines") within the context. This discrepancy (Score 1.0 on a Refusal) provides precise telemetry, attributing the failure to the agent's conservatism rather than a retrieval gap.
+
 \section{Ablation Studies and Discussion}
 
 \subsection{Impact of Domain Filtering}
@@ -246,12 +330,12 @@ Initial experiments without domain filtering showed severe cross-domain contamin
 \subsection{Impact of Prompt Permissiveness}
 We iterated on generator and grader prompts to balance precision with recall:
 
-\textbf{Strict Prompt}: ``Only answer if the context DIRECTLY contains the answer''
+\textbf{Strict Prompt}: ``Only answer if the context DIRECTLY contains the answer'' \textbf{(Separate experiments; not part of the pre-fix run reported here.)}
 \begin{itemize}
     \item Result: High I\_DONT\_KNOW rate (85\%), many valid answers rejected
 \end{itemize}
 
-\textbf{Permissive Prompt}: ``Use context as PRIMARY source; reasonable inferences allowed''
+\textbf{Permissive Prompt}: ``Use context as PRIMARY source; reasonable inferences allowed'' \textbf{(Separate experiments; not part of the pre-fix run reported here.)}
 \begin{itemize}
     \item Result: 64\% answer rate, substantial reduction in false negatives
 \end{itemize}
@@ -265,11 +349,17 @@ Compared to flat chunking (400 chars), Parent-Child chunking:
 \end{itemize}
 
 \subsection{Limitations}
-\begin{enumerate}
-    \item \textbf{Corpus Coverage}: 16/40 failures stem from missing information in the corpus, not system errors
-    \item \textbf{Model Size}: Llama 3.1 8B shows limited reasoning compared to larger models
-    \item \textbf{Evaluation Bias}: Using the same model for generation and RAGAS evaluation introduces optimistic bias
-\end{enumerate}
+\label{sec:limitations}
+
+\paragraph{Corpus Gaps vs. System Failures}
+Our error analysis reveals that the system's performance ceiling is significantly lowered by data sparsity. Specifically, 16 out of the 40 failures (40\%) in the development set were classified as ``Valid Refusals'' or verified corpus gaps. \textbf{(Separate experiments; not part of the pre-fix run reported here.)} This indicates that the raw answer rate of 63.6\% is partially a reflection of the dataset's incompleteness rather than purely an architectural limitation. In these cases, the system correctly identified that no document contained the answer, behaving exactly as designed.
+
+\paragraph{Model Capacity Constraints}
+The use of a 4-bit quantized 8B model (Llama 3.1) introduces distinct reasoning bottlenecks. As seen in the ``False Negative'' refusals (Table~\ref{tab:qualitative_examples}, \texttt{govt\_5}), the compressed model struggles to perform multi-hop deductions or synonym matching that the unquantized 14B Judge handles effortlessly. This confirms that while consumer hardware allows for deployment, it imposes a hard limit on semantic reasoning depth.
+
+\paragraph{Agent-Judge Alignment Gap}
+A significant factor affecting our quantitative scores is the intentional strictness mismatch between the runtime agent and the offline evaluator. The agent is prompted to be ``helpful'' and permissive (allowing reasonable inferences to maximize user satisfaction), whereas the Qwen-14B Judge is prompted to be ``strict'' and penalize any information not explicitly present in the text. This divergence explains the high Hallucination Rate (87\%). \textbf{(Separate experiments; not part of the pre-fix run reported here.)} This highlights the trade-off between conversational fluency and strict RAG adherence.
+
 
 \section{Conclusion}
 
@@ -287,7 +377,7 @@ Our 64\% answer rate demonstrates that carefully engineered open-source systems 
 \textbf{Future Work.} Directions include: (1) larger open-source LLMs when hardware permits, (2) query routing to domain-specific retrievers, and (3) active learning to expand corpus coverage for frequent failure patterns.
 
 \section*{Acknowledgment}
-This work was conducted as part of the Advanced Machine Learning course at Politecnico di Torino.
+This work was conducted as part of the Large Language Models course at Politecnico di Torino.
 
 
 
