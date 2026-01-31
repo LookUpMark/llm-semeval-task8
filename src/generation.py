@@ -1,8 +1,9 @@
-"""Generation Module: Llama 3.2 with 4-bit quantization for RAG + grading chains."""
+"""Generation Module: Llama 3.1 8B with 4-bit quantization for RAG."""
+
+from dataclasses import dataclass
+from typing import Any, List, Tuple
 
 import torch
-from typing import Any, List, Tuple
-from dataclasses import dataclass
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from pydantic import BaseModel, Field
@@ -10,9 +11,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from langchain_huggingface import HuggingFacePipeline
 
 
-# Pydantic schemas for JSON parsing
+# --- Pydantic Schemas ---
 class GradeDocuments(BaseModel):
     binary_score: str = Field(description="Is the document relevant? 'yes' or 'no'")
+
 
 class GradeHallucinations(BaseModel):
     binary_score: str = Field(description="Is the answer supported? 'yes' or 'no'")
@@ -31,19 +33,32 @@ class GenerationComponents:
 def get_llama_pipeline(model_id="meta-llama/Llama-3.1-8B-Instruct") -> HuggingFacePipeline:
     """Configure Llama with 4-bit NF4 quantization for GPU."""
     bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16
+        load_in_4bit=True, 
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4", 
+        bnb_4bit_compute_dtype=torch.float16
     )
+    
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.pad_token = tokenizer.eos_token
     
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, quantization_config=bnb_config, device_map="cuda:0", trust_remote_code=True
+        model_id, 
+        quantization_config=bnb_config, 
+        device_map="cuda:0", 
+        trust_remote_code=True
     )
+    
     pipe = pipeline(
-        "text-generation", model=model, tokenizer=tokenizer,
-        max_new_tokens=1024, do_sample=True, temperature=0.01,
-        repetition_penalty=1.1, pad_token_id=tokenizer.eos_token_id, return_full_text=False
+        "text-generation", 
+        model=model, 
+        tokenizer=tokenizer,
+        max_new_tokens=1024, 
+        do_sample=True, 
+        temperature=0.01,
+        repetition_penalty=1.1, 
+        pad_token_id=tokenizer.eos_token_id, 
+        return_full_text=False
     )
     return HuggingFacePipeline(pipeline=pipe)
 

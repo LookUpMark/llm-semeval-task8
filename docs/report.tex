@@ -16,9 +16,9 @@
 \title{Gbgers at SemEval 2026 Task 8:\\A Resource-Constrained Self-CRAG Architecture for Multi-Turn RAG using Open-Source LLMs}
 
 \author{
-\IEEEauthorblockN{Marc'Antonio Lopez\IEEEauthorrefmark{1}, Filippo Simone Iannello\IEEEauthorrefmark{1}, [Author 3]\IEEEauthorrefmark{1}, [Author 4]\IEEEauthorrefmark{1}, [Author 5]\IEEEauthorrefmark{1}}
+\IEEEauthorblockN{Marc'Antonio Lopez\IEEEauthorrefmark{1}, Filippo Simone Iannello\IEEEauthorrefmark{1}, Nicolò Colle\IEEEauthorrefmark{1}, Carmine Benvenuto\IEEEauthorrefmark{1}, Elia Cola\IEEEauthorrefmark{1}}
 \IEEEauthorblockA{\IEEEauthorrefmark{1}\textit{Department of Control and Computer Engineering, Politecnico di Torino}, Torino, Italy\\
-\{s336362, s345220, sXXXXXX, sXXXXXX, sXXXXXX\}@studenti.polito.it}
+\{s336362, s345220, s336406, s333307, s338009\}@studenti.polito.it}
 }
 
 \maketitle
@@ -62,23 +62,36 @@ These constraints drive every technical decision: 4-bit quantization, CPU offloa
 
 \subsection{Module: Data Ingestion (src/ingestion.py)}
 
-A fundamental tension exists in RAG systems between retrieval precision and contextual completeness. Small chunks match user queries precisely but lack the surrounding context needed for coherent answers. Large chunks preserve context but introduce noise that degrades retrieval quality.
+The ingestion pipeline is designed to preserve semantic continuity while remaining efficient on constrained hardware. Rather than treating ingestion as a simple pre-processing step, we explicitly optimize it for multi-turn RAG, where context loss triggers broken coreference, retrieval drift, and hallucinations.
 
-We resolve this tension through a \textbf{Parent-Child chunking strategy}. Documents are first split into Parent chunks of approximately 1200 characters---large enough to contain complete semantic units like full paragraphs or sections. Each Parent is then subdivided into Child chunks of 400 characters, optimized for dense vector matching.
+\paragraph{Corpus processing and metadata preservation.}
+The mtRAG corpus is delivered as JSONL files across heterogeneous domains (finance, government, cloud). In \texttt{load\_and\_chunk\_data}, we parse each record and explicitly retain \texttt{title}, \texttt{url}, and \texttt{source} fields. These metadata are not archival: they are injected into the retrieval context to enable source-aware generation and improve Faithfulness. This choice avoids a common RAG anti-pattern where metadata is discarded early and cannot be surfaced at answer time.
 
-The key insight is that we \textit{search over children but generate from parents}. During indexing, each Child chunk stores its Parent's complete text in metadata. At query time, the retriever matches against the fine-grained Child embeddings, but the generator receives the broader Parent context. This achieves the best of both worlds: precise retrieval with coherent generation.
+\paragraph{Context fragmentation and the Parent-Child strategy.}
+A critical failure mode in standard RAG systems is \textit{context fragmentation}: small chunks maximize retrieval precision but often omit antecedents needed to resolve pronouns or ellipses (e.g., ``He signed the act'' without the subject). To address this, we implement \textbf{Parent-Child chunking} via \texttt{RecursiveCharacterTextSplitter}. Raw documents are first split into Parent chunks of \textbf{1200 characters with 100-character overlap}, sized to preserve coherent narrative units. Each Parent is then subdivided into Child chunks of \textbf{400 characters with 50-character overlap}, optimized for dense embedding models.
 
-All documents are indexed in a unified Qdrant collection with domain metadata attached to each chunk. This enables filtered retrieval: when processing a government conversation, we restrict search to government documents only. Without this filtering, we observed severe cross-domain contamination---a query about NASA's ``Europa Clipper'' retrieved financial documents about ``European markets'' due to semantic similarity in the word ``Europa.''
+The key design choice is to \textit{index children but retrieve parents}. We index Child embeddings in Qdrant, while storing the Parent content in metadata (\texttt{parent\_text}, \texttt{parent\_title}, \texttt{parent\_url}, \texttt{parent\_id}). At query time, a relevant Child chunk triggers retrieval of its Parent text, so the LLM receives a coherent block rather than a fragmented snippet. This hybrid approach couples high-recall vector search with generation-ready context.
+
+\paragraph{Vector representation and resource-aware storage.}
+Embeddings are computed with \textbf{BGE-M3} (\texttt{BAAI/bge-m3}), chosen for state-of-the-art dense retrieval and robustness to multi-granularity inputs. This capability is crucial because user questions are often short and synthetic (e.g., ``Who is the CEO?''), while Child chunks are longer and discursive. To prevent VRAM saturation during ingestion, we load the embedding model once (singleton pattern) and run encoding on CPU when necessary.
+
+All vectors are stored in a local Qdrant collection (\texttt{mtrag\_unified}) using \textbf{cosine similarity}. Each chunk carries domain metadata to support filtered retrieval, reducing cross-domain contamination (e.g., ``Europa'' in finance vs. NASA). Indexing is executed in batches for throughput stability, and the local persistence of Qdrant eliminates the overhead of a separate container during development.
 
 \subsection{Module: Retrieval (src/retrieval.py)}
 
 Dense retrieval using bi-encoders is fast but imprecise: the query and documents are embedded independently, limiting the model's ability to capture fine-grained semantic relationships. Cross-encoders provide more accurate relevance scoring by jointly encoding the query-document pair, but are computationally expensive and non-parallelizable.
 
-We combine both approaches in a \textbf{two-stage retrieval pipeline}. First, we use \textbf{BGE-M3} embeddings to retrieve the top-20 candidate documents via fast approximate nearest neighbor search. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations.
+We combine both approaches in a \textbf{two-stage retrieval pipeline} wrapped in LangChain's \texttt{ContextualCompressionRetriever}. First, we use \textbf{BGE-M3} (\texttt{BAAI/bge-m3}) embeddings to retrieve the \textbf{top-20 candidate documents} via fast approximate nearest neighbor search against Qdrant. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations with L2 normalization.
 
-Second, the \textbf{BGE-reranker-v2-m3} cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the top-5 most relevant documents for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
+Second, the \textbf{BGE-reranker-v2-m3} (\texttt{BAAI/bge-reranker-v2-m3}) cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the \textbf{top-5 most relevant documents} for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
 
-To maximize GPU memory for the LLM, both the embedding model and reranker run on CPU. This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
+\subsubsection{Domain Filtering}
+To prevent cross-domain contamination, the retriever applies a \textbf{Qdrant metadata filter} when a domain is specified. The filter uses a \texttt{FieldCondition} on \texttt{metadata.domain} with exact match semantics, ensuring that only documents from the target corpus are considered. This isolation is critical for multi-domain RAG systems.
+
+\subsubsection{Parent-Text Deduplication}
+Since multiple Child chunks may share the same Parent, the \texttt{format\_docs\_for\_gen()} function extracts unique parent texts from retrieved documents, preventing redundant context from inflating the prompt. This deduplication uses a set-based approach to guarantee each parent appears only once in the final context.
+
+To maximize GPU memory for the LLM, both the embedding model and reranker run on \textbf{CPU} (configured via \texttt{device='cpu'}). This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
 
 \subsection{Module: Graph Orchestration (src/graph.py)}
 
@@ -129,17 +142,43 @@ When hallucination is detected, the system does not immediately give up. Instead
 A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a diagnostic reason that categorizes the failure mode. The system distinguishes between six distinct scenarios: retrieval returning zero candidates from the vector store, all retrieved documents failing the relevance grading threshold, the generator explicitly choosing to refuse rather than risk an incorrect answer, technical failures during LLM inference, and---most interestingly---cases where the model generates plausible-sounding answers that fail hallucination checks even after multiple regeneration attempts. This granular telemetry transforms opaque refusals into actionable debugging signals. A prevalence of relevance grading failures suggests the need for corpus expansion or better chunking strategies; frequent LLM refusals indicate overly conservative prompting that should be relaxed; repeated hallucination loop exhaustion points to fundamental model limitations that might require upgrading to a larger or better-tuned variant.
 
 \subsection{Module: Evaluation (eval/evaluate.py)}
+\label{sec:evaluation}
 
-We use RAGAS for offline evaluation, employing Llama 3.1 8B as the judge model (no external APIs). The evaluation pipeline:
-\begin{enumerate}
-    \item Links generated submissions with ground truth from `conversations.json` via `original\_index`.
-    \item Computes key metrics:
+To rigorously validate our architecture's effectiveness within a resource-constrained environment where ``hallucination is fatal,'' we developed a deterministic offline evaluation pipeline. Unlike traditional lexical metrics (e.g., ROUGE or BLEU), which fail to capture factual consistency or the validity of a refusal, our system employs a hybrid \textit{Model-Based Evaluation} approach.
+
+The framework utilizes \textbf{Qwen2.5-14B-Instruct} as the \textit{Judge LLM}—selected for its superior reasoning capabilities over 7B/8B models—and \textbf{all-MiniLM-L6-v2} for efficient vector similarity calculations. The evaluation logic is bifurcated based on the agent's output:
+
+\paragraph{1) Refusal Accuracy Protocol}
+Given that the dataset contains unanswerable questions, the ability to correctly refuse is paramount. When the agent emits the \texttt{I\_DONT\_KNOW} token, the system triggers a specific routine (\texttt{evaluate\_refusal\_justification}) that does not penalize the absence of an answer but evaluates the \textbf{justification} of the refusal:
+\begin{itemize}
+    \item \textbf{Input:} User question and \textit{Retrieved Context}.
+    \item \textbf{Logic:} The Judge verifies if the context actually contained the necessary information.
+    \item \textbf{Scoring:}
     \begin{itemize}
-        \item \textbf{Faithfulness}: Grounding of answer in context.
-        \item \textbf{Answer Relevancy}: Relevance to the query.
-        \item \textbf{Context Precision}: Quality of retrieval.
+        \item \textit{Score 10 (Correct Refusal):} The context does NOT contain the answer. The refusal is validated.
+        \item \textit{Score 1 (False Negative):} The context CONTAINS the answer. The agent failed to recognize available information.
     \end{itemize}
+\end{itemize}
+In this scenario, the \textit{Correctness} metric is marked as ``N/A'' and the \textit{Hallucination} flag is automatically set to ``NO''.
+
+\paragraph{2) Answer Assessment Pipeline}
+When the agent produces a discursive response, evaluation proceeds along two parallel axes to measure both context adherence and semantic correctness:
+
+\textbf{a. Faithfulness \& Hallucination Detection:} The Judge evaluates solely if the response is supported by the retrieved documents, isolating the system from external knowledge leakage. The prompt enforces a structured JSON-like format extracting:
+\begin{itemize}
+    \item \textbf{Hallucination Flag:} A binary classifier (\texttt{YES}/\texttt{NO}) triggered if the response cites facts not present in the context.
+    \item \textbf{Score (1--10):} A scale that severely penalizes inventions (1--4) and rewards verified details (8--10).
+\end{itemize}
+
+\textbf{b. Hybrid Semantic Correctness:} To assess alignment with the \textit{Ground Truth} while reducing computational costs, we implement a two-stage approach:
+\begin{enumerate}
+    \item \textbf{Vector Shortcut:} We calculate Cosine Similarity (via MiniLM) between the generated answer and the Ground Truth. If similarity exceeds \textbf{0.95}, the system automatically assigns a score of \textbf{10/10}, assuming perfect semantic equivalence.
+    \item \textbf{LLM Grading:} Below this threshold, the \textit{Judge LLM} evaluates semantic correctness (1--10), distinguishing between factual errors (1--3), partial answers (4--6), and valid paraphrases (7--10).
 \end{enumerate}
+
+\paragraph{3) Robust Parsing \& Technical Implementation}
+The implementation addresses Qwen-specific behaviors, explicitly managing special stop tokens (e.g., \texttt{<|im\_end|>}) to prevent generative loops. Scores are extracted via \textbf{Regular Expressions (Regex)} that isolate the \texttt{Reasoning}, \texttt{Score}, and \texttt{Hallucination} fields from the model's Chain-of-Thought. To guarantee benchmark reliability, any parsing failure or runtime error triggers a \textit{pessimistic fallback} mechanism, assigning the minimum score (1.0) to prevent artificial performance inflation.
+
 
 \section{Experimental Setup}
 
