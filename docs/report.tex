@@ -279,6 +279,49 @@ When asked ``Can a 17 year old be the defendant in a claim?'', the system return
 \paragraph{Retrieval Limit: Short Query (ID: clapnq\_4)}
 The user provided a generic, keyword-only query: ``secondary source''. The Rewriter failed to expand this into a distinct question, and the dense retriever failed to find documents exceeding the relevance threshold. This case highlights a limitation in handling extremely telegraphic user inputs and suggests a need for more aggressive query expansion strategies to bridge the gap between keyword search and semantic retrieval.
 
+\subsection{Automated Evaluation Analysis (Judge-Based)}
+To validate the system's internal telemetry, we executed the offline evaluation pipeline described in Section~\ref{sec:evaluation} using \textbf{Qwen2.5-14B-Instruct}. The strict evaluation reveals a significant divergence between the agent's confidence and the judge's assessment. While the system achieved a 63.6\% answer rate, the granular analysis highlights the complexity of balancing "helpfulness" with strict factual adherence. The judge identified that while some refusals were false negatives, the system successfully avoided hallucination in cases where the context was legitimately completely missing, though it struggled with partial context matches.
+
+\subsection{Evaluation Results}
+In this section we analyze specific interaction patterns verified by the offline Judge. Table~\ref{tab:qualitative_examples} details five representative instances, juxtaposing the agent's output with the evaluator's reasoning.
+
+\begin{table*}[t]
+    \centering
+    \caption{Selected Rows from Evaluation Logs}
+    \label{tab:qualitative_examples}
+    \scriptsize
+    \begin{tabular}{p{0.07\linewidth} p{0.15\linewidth} p{0.22\linewidth} p{0.33\linewidth} p{0.05\linewidth} p{0.08\linewidth}}
+        \toprule
+        \textbf{ID} & \textbf{Question} & \textbf{Generated Answer} & \textbf{Judge Reasoning (Excerpt)} & \textbf{Score} & \textbf{Verdict} \\
+        \midrule
+        \texttt{clapnq\_14} & "How many teams?" & "The NFL consists of 32 teams, divided into two conferences: AFC and NFC, each with 16 teams." & "The answer accurately reflects the information... mentioning the division into two conferences... No hallucinations." & \textbf{10.0} & \textcolor{green}{Perfect Match} \\
+        \midrule
+        \texttt{fiqa\_8} & "Is interest taxable?" & "Yes, interest income is generally taxable and must be reported on your federal tax return." & "The answer correctly states that interest is taxable, but fails to mention the specific exemption for amounts under \$10 mentioned in Doc 2." & \textbf{7.0} & \textcolor{olive}{Partial Accuracy} \\
+        \midrule
+        \texttt{cloud\_3} & "Force restart command" & "I\_DONT\_KNOW" & "The retrieved context discusses graceful shutdown procedures but does not contain the specific force restart command requested. The refusal is justified." & \textbf{10.0} & \textcolor{green}{Valid Refusal} \\
+        \midrule
+        \texttt{govt\_1} & "Sollutions" & "Solving this issue is crucial for sending humans into the solar system. Better shielding is needed." & "The answer discusses solutions to protect astronauts from space radiation... The context talks about API operations. Completely unrelated." & \textbf{1.0} & \textcolor{red}{Severe Hallucination} \\
+        \midrule
+        \texttt{govt\_5} & "Fines and penalties" & "I\_DONT\_KNOW" & "The context contains information related to fines for improper facility use... It specifies fines for not abiding by organic waste requirements. The refusal is a False Negative." & \textbf{1.0} & \textcolor{orange}{Bad Refusal} \\
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+\paragraph{Precision Verification (\texttt{clapnq\_14})}
+This instance validates the system's end-to-end fidelity. The Judge assigns a maximum score of 10.0, confirming that the Parent-Child chunking strategy successfully preserved the numerical details required to answer the query without introducing extraneous noise.
+
+\paragraph{Granular Penalty for Omission (\texttt{fiqa\_8})}
+Unlike binary metrics, the Judge demonstrates nuanced scoring by assigning a 7.0. While the generated answer is factually correct in a broad sense, the evaluator penalizes the omission of a specific exemption found in the retrieved documents ("under \$10"). This highlights the framework's ability to distinguish between "helpful but incomplete" answers and hallucinations.
+
+\paragraph{True Negative Identification (\texttt{cloud\_3})}
+This case exemplifies a successful "Safe Refusal." The user requested a command absent from the documentation. Crucially, the Judge (having access to the same context) confirms the absence of the information, validating the agent's decision to fallback to \texttt{I\_DONT\_KNOW} as a correct architectural behavior rather than a failure.
+
+\paragraph{Domain Mismatch Detection (\texttt{govt\_1})}
+The Judge severely penalizes (Score 1.0) a case of "Knowledge Leakage." The agent, triggered by a vague query, ignored the retrieved technical context (API docs) to generate a response based on pre-training knowledge (space radiation). The evaluation pipeline correctly flags this as a hallucination, enforcing the strict "grounding-only" constraint required by the task.
+
+\paragraph{False Negative Attribution (\texttt{govt\_5})}
+Conversely to \texttt{cloud\_3}, here the Judge exposes a limitation in the 8B model's reasoning. Although the agent refused to answer, the 14B Judge successfully identified the relevant information ("improper facility use fines") within the context. This discrepancy (Score 1.0 on a Refusal) provides precise telemetry, attributing the failure to the agent's conservatism rather than a retrieval gap.
+
 \section{Ablation Studies and Discussion}
 
 \subsection{Impact of Domain Filtering}
