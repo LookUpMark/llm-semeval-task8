@@ -139,12 +139,12 @@ The core innovation of our architecture is the integration of two complementary 
 When hallucination is detected, the system does not immediately give up. Instead, it loops back to the Generate node, attempting regeneration up to two times. This retry mechanism captures cases where the LLM initially produces a flawed response but can self-correct given another chance. Only after exhausting retries does the system fall back gracefully.
 
 \subsubsection{Fallback Telemetry}
-A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a diagnostic reason that categorizes the failure mode. The system distinguishes between six distinct scenarios: retrieval returning zero candidates from the vector store, all retrieved documents failing the relevance grading threshold, the generator explicitly choosing to refuse rather than risk an incorrect answer, technical failures during LLM inference, and---most interestingly---cases where the model generates plausible-sounding answers that fail hallucination checks even after multiple regeneration attempts. This granular telemetry transforms opaque refusals into actionable debugging signals. A prevalence of relevance grading failures suggests the need for corpus expansion or better chunking strategies; frequent LLM refusals indicate overly conservative prompting that should be relaxed; repeated hallucination loop exhaustion points to fundamental model limitations that might require upgrading to a larger or better-tuned variant.
+A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a diagnostic reason that categorizes the failure mode. In our pre-fix runs, the telemetry consistently reports three explicit scenarios: \texttt{irrelevant\_docs} (all retrieved documents fail relevance grading), \texttt{hallucination\_loop\_exhausted} (answers repeatedly fail grounding checks after retries), and \texttt{llm\_refusal} (the generator explicitly declines). Successful answers are labeled as \texttt{none}. This granular telemetry transforms opaque refusals into actionable debugging signals. A prevalence of relevance grading failures suggests the need for corpus expansion or better chunking strategies; frequent LLM refusals indicate overly conservative prompting that should be relaxed; repeated hallucination loop exhaustion points to fundamental model limitations that might require upgrading to a larger or better-tuned variant.
 
-\subsection{Module: Evaluation (eval/evaluate.py)}
+\subsection{Module: Evaluation (eval/evaluate.ipynb)}
 \label{sec:evaluation}
 
-To rigorously validate our architecture's effectiveness within a resource-constrained environment where ``hallucination is fatal,'' we developed a deterministic offline evaluation pipeline. Unlike traditional lexical metrics (e.g., ROUGE or BLEU), which fail to capture factual consistency or the validity of a refusal, our system employs a hybrid \textit{Model-Based Evaluation} approach.
+To rigorously validate our architecture's effectiveness within a resource-constrained environment where ``hallucination is fatal,'' we developed a semi-deterministic offline evaluation pipeline. Unlike traditional lexical metrics (e.g., ROUGE or BLEU), which fail to capture factual consistency or the validity of a refusal, our system employs a hybrid \textit{Model-Based Evaluation} approach.
 
 The framework utilizes \textbf{Qwen2.5-14B-Instruct} as the \textit{Judge LLM}—selected for its superior reasoning capabilities over 7B/8B models—and \textbf{all-MiniLM-L6-v2} for efficient vector similarity calculations. The evaluation logic is bifurcated based on the agent's output:
 
@@ -245,7 +245,7 @@ llm\_refusal & 12 \\
 \end{center}
 \end{table}
 
-The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
+The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. \textbf{(Separate experiments; not part of the pre-fix run reported here.)} This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
 
 
 \subsection{Qualitative Case Studies}
@@ -330,12 +330,12 @@ Initial experiments without domain filtering showed severe cross-domain contamin
 \subsection{Impact of Prompt Permissiveness}
 We iterated on generator and grader prompts to balance precision with recall:
 
-\textbf{Strict Prompt}: ``Only answer if the context DIRECTLY contains the answer''
+\textbf{Strict Prompt}: ``Only answer if the context DIRECTLY contains the answer'' \textbf{(Separate experiments; not part of the pre-fix run reported here.)}
 \begin{itemize}
     \item Result: High I\_DONT\_KNOW rate (85\%), many valid answers rejected
 \end{itemize}
 
-\textbf{Permissive Prompt}: ``Use context as PRIMARY source; reasonable inferences allowed''
+\textbf{Permissive Prompt}: ``Use context as PRIMARY source; reasonable inferences allowed'' \textbf{(Separate experiments; not part of the pre-fix run reported here.)}
 \begin{itemize}
     \item Result: 64\% answer rate, substantial reduction in false negatives
 \end{itemize}
@@ -352,13 +352,13 @@ Compared to flat chunking (400 chars), Parent-Child chunking:
 \label{sec:limitations}
 
 \paragraph{Corpus Gaps vs. System Failures}
-Our error analysis reveals that the system's performance ceiling is significantly lowered by data sparsity. Specifically, 16 out of the 40 failures (40\%) in the development set were classified as ``Valid Refusals'' or verified corpus gaps. This indicates that the raw answer rate of 63.6\% is partially a reflection of the dataset's incompleteness rather than purely an architectural limitation. In these cases, the system correctly identified that no document contained the answer, behaving exactly as designed.
+Our error analysis reveals that the system's performance ceiling is significantly lowered by data sparsity. Specifically, 16 out of the 40 failures (40\%) in the development set were classified as ``Valid Refusals'' or verified corpus gaps. \textbf{(Separate experiments; not part of the pre-fix run reported here.)} This indicates that the raw answer rate of 63.6\% is partially a reflection of the dataset's incompleteness rather than purely an architectural limitation. In these cases, the system correctly identified that no document contained the answer, behaving exactly as designed.
 
 \paragraph{Model Capacity Constraints}
 The use of a 4-bit quantized 8B model (Llama 3.1) introduces distinct reasoning bottlenecks. As seen in the ``False Negative'' refusals (Table~\ref{tab:qualitative_examples}, \texttt{govt\_5}), the compressed model struggles to perform multi-hop deductions or synonym matching that the unquantized 14B Judge handles effortlessly. This confirms that while consumer hardware allows for deployment, it imposes a hard limit on semantic reasoning depth.
 
 \paragraph{Agent-Judge Alignment Gap}
-A significant factor affecting our quantitative scores is the intentional strictness mismatch between the runtime agent and the offline evaluator. The agent is prompted to be ``helpful'' and permissive (allowing reasonable inferences to maximize user satisfaction), whereas the Qwen-14B Judge is prompted to be ``strict'' and penalize any information not explicitly present in the text. This divergence explains the high Hallucination Rate (87\%): many answers deemed ``useful'' by the agent are technically classified as ``knowledge leakage'' by the rigorous Judge. This highlights the trade-off between conversational fluency and strict RAG adherence.
+A significant factor affecting our quantitative scores is the intentional strictness mismatch between the runtime agent and the offline evaluator. The agent is prompted to be ``helpful'' and permissive (allowing reasonable inferences to maximize user satisfaction), whereas the Qwen-14B Judge is prompted to be ``strict'' and penalize any information not explicitly present in the text. This divergence explains the high Hallucination Rate (87\%). \textbf{(Separate experiments; not part of the pre-fix run reported here.)} This highlights the trade-off between conversational fluency and strict RAG adherence.
 
 
 \section{Conclusion}
