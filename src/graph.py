@@ -1,263 +1,234 @@
-"""
-Graph Orchestration Module for MTRAGEval.
+"""Self-CRAG Graph Orchestration with Retry Loop."""
 
-Self-CRAG workflow with Retry Loop:
-When hallucination is detected, retries generation up to MAX_RETRIES times
-before falling back to "I_DONT_KNOW".
-"""
+import os
+from typing import Dict, Any
 
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import AIMessage, HumanMessage
-from src.state import GraphState
-from src.generation import query_rewriter, generator, retrieval_grader, hallucination_grader
-from src.retrieval import get_retriever, format_docs_for_gen
+
+from .state import GraphState
+from .retrieval import get_retriever, format_docs_for_gen
+from .generation import create_generation_components
+
 
 # Configuration
 MAX_RETRIES = 2
 
+# Robust Project Root Logic
+if os.path.exists("src"):
+    PROJECT_ROOT = os.getcwd()
+elif os.path.exists("llm-semeval-task8"):
+    PROJECT_ROOT = os.path.join(os.getcwd(), "llm-semeval-task8")
+else:
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+QDRANT_PATH = os.path.join(PROJECT_ROOT, "qdrant_db")
+
+
+# Lazy-initialized singletons
+_components = None
+_retriever = None
+
+
+def _get_components():
+    """Lazy load generation components."""
+    global _components
+    if _components is None:
+        print("Loading LLM and generation components...")
+        _components = create_generation_components()
+    return _components
+
+
+def _get_retriever_for_domain(domain: str):
+    """Returns retriever filtered by domain. Cached per-domain."""
+    global _retriever
+    if _retriever is None:
+        _retriever = {}
+    
+    if domain not in _retriever:
+        print(f"Initializing retriever for domain: {domain}")
+        _retriever[domain] = get_retriever(
+            qdrant_path=QDRANT_PATH, 
+            collection_name="mtrag_unified", 
+            top_k_retrieve=20, 
+            top_k_rerank=5,
+            domain=domain
+        )
+    return _retriever[domain]
+
 
 # --- NODES ---
 
-def rewrite_node(state: GraphState) -> dict:
-<<<<<<< Updated upstream
-    """
-    Node 1: Rewrites the user query.
+def rewrite_node(state: GraphState) -> Dict[str, Any]:
+    """Rewrites context-dependent questions to standalone form."""
+    components = _get_components()
+    question, messages = state.get("question", ""), state.get("messages", [])
     
-    Takes the user's question and conversation history, 
-    rewrites context-dependent questions to standalone form.
+    # Format history for prompt
+    chat_history = [("human" if isinstance(m, HumanMessage) else "ai", m.content) for m in messages]
     
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        Dict with 'standalone_question' key.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("rewrite_node: Implement query rewriting logic")
+    try:
+        result = components.query_rewriter.invoke({"question": question, "messages": chat_history})
+        return {"standalone_question": result if isinstance(result, str) else str(result)}
+    except Exception as e:
+        print(f"Rewrite failed: {e}, using original question")
+        return {"standalone_question": question}
 
 
-def retrieve_node(state: GraphState) -> dict:
-    """
-    Node 2: Searches the Vector Store.
+def retrieve_node(state: GraphState) -> Dict[str, Any]:
+    """Searches Qdrant for relevant documents."""
+    question = state.get("standalone_question") or state.get("question", "")
+    domain = state.get("domain", "govt")
     
-    Uses the standalone question to retrieve relevant documents.
+    try:
+        documents = _get_retriever_for_domain(domain).invoke(question)
+    except Exception as e:
+        print(f"Retrieval failed: {e}")
+        documents = []
+        
+    return {"documents": documents, "retry_count": 0}
+
+
+def grade_documents_node(state: GraphState) -> Dict[str, Any]:
+    """CRAG: filters irrelevant documents."""
+    components = _get_components()
+    documents = state.get("documents", [])
+    question = state.get("standalone_question") or state.get("question", "")
     
-    Args:
-        state: Current graph state with standalone_question.
-        
-    Returns:
-        Dict with 'documents' key containing retrieved docs.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("retrieve_node: Implement vector store retrieval")
-
-
-def grade_documents_node(state: GraphState) -> dict:
-    """
-    Node 3: Filters irrelevant documents.
+    if not documents:
+        return {"documents_relevant": "no", "documents": [], "fallback_reason": "irrelevant_docs"}
     
-    Uses retrieval_grader to evaluate each document's relevance.
-    Handles JSON parsing errors by defaulting to 'no' (safe fallback).
+    relevant_docs = []
+    for doc in documents:
+        try:
+            content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+            result = components.retrieval_grader.invoke({"document": content, "question": question})
+            score = result.get("binary_score", "no") if isinstance(result, dict) else "no"
+            
+            if score == "yes":
+                relevant_docs.append(doc)
+        except Exception as e:
+            print(f"Grading error: {e}")
+            relevant_docs.append(doc)  # Fail open on error
     
-    Args:
-        state: Current graph state with documents.
-        
-    Returns:
-        Dict with filtered 'documents' and 'documents_relevant' flag.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("grade_documents_node: Implement CRAG document filtering")
+    if relevant_docs:
+        return {"documents_relevant": "yes", "documents": relevant_docs, "fallback_reason": "none"}
+    else:
+        return {"documents_relevant": "no", "documents": [], "fallback_reason": "irrelevant_docs"}
 
 
-def generate_node(state: GraphState) -> dict:
-    """
-    Node 4: Generates the response.
+def generate_node(state: GraphState) -> Dict[str, Any]:
+    """Generates answer from documents using Llama."""
+    components = _get_components()
+    context = format_docs_for_gen(state.get("documents", []))
+    question = state.get("standalone_question") or state.get("question", "")
     
-    Uses generator to produce answer from documents and question.
-    Empty context leads to I_DONT_KNOW response.
+    try:
+        result = components.generator.invoke({"context": context, "question": question})
+        generation = result if isinstance(result, str) else str(result)
+        
+        fallback_reason = "none"
+        if "I_DONT_KNOW" in generation:
+            fallback_reason = "llm_refusal"
+            
+        return {"generation": generation, "fallback_reason": fallback_reason}
+    except Exception as e:
+        print(f"Generation failed: {e}")
+        return {"generation": "I_DONT_KNOW", "fallback_reason": "generation_error"}
+
+
+def hallucination_check_node(state: GraphState) -> Dict[str, Any]:
+    """Self-RAG: checks if generation is grounded in documents."""
+    components = _get_components()
+    documents = state.get("documents", [])
+    generation = state.get("generation", "")
     
-    Args:
-        state: Current graph state with filtered documents.
-        
-    Returns:
-        Dict with 'generation' key containing the answer.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("generate_node: Implement answer generation")
-
-
-def hallucination_check_node(state: GraphState) -> dict:
-    """
-    Node 5: Post-generation verification.
+    if not documents or "I_DONT_KNOW" in generation:
+        return {"is_hallucination": "no"}
     
-    Uses hallucination_grader to check if generation is supported
-    by the source documents.
-    
-    Args:
-        state: Current graph state with generation.
-        
-    Returns:
-        Dict with 'is_hallucination' flag.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("hallucination_check_node: Implement Self-RAG hallucination check")
+    try:
+        result = components.hallucination_grader.invoke({
+            "documents": format_docs_for_gen(documents), 
+            "generation": generation
+        })
+        score = result.get("binary_score", "yes") if isinstance(result, dict) else "yes"
+        return {"is_hallucination": "no" if score == "yes" else "yes"}
+    except Exception as e:
+        print(f"Hallucination check failed: {e}")
+        return {"is_hallucination": "no"}
 
 
-def fallback_node(state: GraphState) -> dict:
-    """
-    Fallback Node: Returns I_DONT_KNOW.
-    
-    Used when documents are irrelevant or generation is hallucinated.
-    
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        Dict with 'generation': 'I_DONT_KNOW' and empty 'messages'.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("fallback_node: Implement fallback response")
-=======
-    """Rewrites ambiguous queries to be standalone."""
-    raise NotImplementedError("rewrite_node")
+def increment_retry_node(state: GraphState) -> Dict[str, Any]:
+    return {"retry_count": state.get("retry_count", 0) + 1}
 
 
-def retrieve_node(state: GraphState) -> dict:
-    """Searches Qdrant and resets retry_count to 0."""
-    raise NotImplementedError("retrieve_node")
-
-
-def grade_documents_node(state: GraphState) -> dict:
-    """Filters irrelevant documents. Sets documents_relevant flag."""
-    raise NotImplementedError("grade_documents_node")
-
-
-def generate_node(state: GraphState) -> dict:
-    """Generates answer from filtered documents."""
-    raise NotImplementedError("generate_node")
-
-
-def hallucination_check_node(state: GraphState) -> dict:
-    """Checks if generation is grounded in documents."""
-    raise NotImplementedError("hallucination_check_node")
-
-
-def increment_retry_node(state: GraphState) -> dict:
-    """Increments retry_count before re-generation attempt."""
-    raise NotImplementedError("increment_retry_node")
-
-
-def fallback_node(state: GraphState) -> dict:
-    """Returns I_DONT_KNOW when all else fails."""
-    raise NotImplementedError("fallback_node")
->>>>>>> Stashed changes
+def fallback_node(state: GraphState) -> Dict[str, Any]:
+    """Returns I_DONT_KNOW with appropriate reason."""
+    reason = state.get("fallback_reason")
+    if not reason or reason == "none":
+        # Determine strict reason for generic fallback
+        if state.get("is_hallucination") == "yes" and state.get("retry_count", 0) >= MAX_RETRIES:
+            reason = "hallucination_loop_exhausted"
+        else:
+            reason = "fallback_triggered"
+            
+    return {"generation": "I_DONT_KNOW", "fallback_reason": reason}
 
 
 # --- CONDITIONAL EDGES ---
 
 def decide_to_generate(state: GraphState) -> str:
-    """
-<<<<<<< Updated upstream
-    Conditional edge: Decide whether to generate or fallback.
-    
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        'generate' if documents are relevant, 'fallback' otherwise.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-=======
-    After grading: 'generate' if docs relevant, else 'fallback'.
->>>>>>> Stashed changes
-    """
-    raise NotImplementedError("decide_to_generate")
+    return "generate" if state.get("documents_relevant", "no") == "yes" else "fallback"
 
 
 def decide_to_final(state: GraphState) -> str:
-    """
-<<<<<<< Updated upstream
-    Conditional edge: Decide whether to accept generation or fallback.
-    
-    Args:
-        state: Current graph state.
-        
-    Returns:
-        'end' if generation is supported, 'fallback' if hallucinated.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-=======
-    After hallucination check:
-    - 'end' if grounded
-    - 'increment_retry' if hallucinated but retries left
-    - 'fallback' if max retries reached
->>>>>>> Stashed changes
-    """
-    raise NotImplementedError("decide_to_final")
+    if state.get("is_hallucination", "no") == "no":
+        return "end"
+    if state.get("retry_count", 0) < MAX_RETRIES:
+        return "increment_retry"
+    return "fallback"
 
 
 # --- GRAPH CONSTRUCTION ---
 
 def build_graph() -> StateGraph:
-    """
-    Builds Self-CRAG graph with retry loop.
+    """Builds Self-CRAG graph: rewrite -> retrieve -> grade -> generate -> hallucination_check."""
+    workflow = StateGraph(GraphState)
     
-<<<<<<< Updated upstream
-    Graph structure:
-    START -> rewrite -> retrieve -> grade_docs 
-          -> [conditional: generate or fallback]
-          -> generate -> hallucination_check 
-          -> [conditional: end or fallback]
-          -> END
+    # Register nodes
+    workflow.add_node("rewrite", rewrite_node)
+    workflow.add_node("retrieve", retrieve_node)
+    workflow.add_node("grade_docs", grade_documents_node)
+    workflow.add_node("generate", generate_node)
+    workflow.add_node("hallucination_check", hallucination_check_node)
+    workflow.add_node("increment_retry", increment_retry_node)
+    workflow.add_node("fallback", fallback_node)
     
-    Returns:
-        Compiled StateGraph application.
-        
-    Raises:
-        NotImplementedError: Function not yet implemented.
-=======
-    Flow:
-    START -> rewrite -> retrieve -> grade_docs
-    -> [generate if docs OK, else fallback]
-    -> hallucination_check
-    -> [end if grounded, increment_retry if retries left, fallback if max]
-    -> increment_retry loops back to generate
->>>>>>> Stashed changes
-    """
-    raise NotImplementedError("build_graph")
+    # Define Flow
+    workflow.add_edge(START, "rewrite")
+    workflow.add_edge("rewrite", "retrieve")
+    workflow.add_edge("retrieve", "grade_docs")
+    workflow.add_conditional_edges(
+        "grade_docs", 
+        decide_to_generate, 
+        {"generate": "generate", "fallback": "fallback"}
+    )
+    workflow.add_edge("generate", "hallucination_check")
+    workflow.add_conditional_edges(
+        "hallucination_check", 
+        decide_to_final, 
+        {"end": END, "increment_retry": "increment_retry", "fallback": "fallback"}
+    )
+    workflow.add_edge("increment_retry", "generate")
+    workflow.add_edge("fallback", END)
+    
+    return workflow.compile()
 
 
-# Compiled app placeholder
 app = None
 
-
 def initialize_graph():
-<<<<<<< Updated upstream
-    """
-    Initialize and compile the graph.
-    
-    Must be called before using 'app'.
-    
-    Raises:
-        NotImplementedError: Function not yet implemented.
-    """
-    raise NotImplementedError("initialize_graph: Implement graph initialization")
-=======
-    """Initializes the graph. Call once at startup."""
+    """Initializes the graph singleton."""
     global app
     app = build_graph()
->>>>>>> Stashed changes
+    return app

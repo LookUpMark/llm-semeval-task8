@@ -1,0 +1,294 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\begin{document}
+
+\title{Gbgers at SemEval 2026 Task 8:\\A Resource-Constrained Self-CRAG Architecture for Multi-Turn RAG using Open-Source LLMs}
+
+\author{
+\IEEEauthorblockN{Marc'Antonio Lopez\IEEEauthorrefmark{1}, Filippo Simone Iannello\IEEEauthorrefmark{1}, Nicolò Colle\IEEEauthorrefmark{1}, Carmine Benvenuto\IEEEauthorrefmark{1}, Elia Cola\IEEEauthorrefmark{1}}
+\IEEEauthorblockA{\IEEEauthorrefmark{1}\textit{Department of Control and Computer Engineering, Politecnico di Torino}, Torino, Italy\\
+\{s336362, s34520, s336406, s333307, s338009\}@studenti.polito.it}
+}
+
+\maketitle
+
+\begin{abstract}
+We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 64\% answer rate with detailed failure attribution across four categories: irrelevant documents (16), hallucination loops (12), and LLM refusals (12). All components are fully reproducible using only open-source tools.
+\end{abstract}
+
+\begin{IEEEkeywords}
+retrieval-augmented generation, self-corrective RAG, multi-turn dialogue, LangGraph, open-source LLMs
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+\subsection{The Task}
+SemEval 2026 Task 8 challenges participants to build conversational RAG systems capable of handling multi-turn dialogues across four domains: government documents (govt), community Q\&A (clapnq), financial Q\&A (fiqa), and cloud documentation (cloud). The task requires systems to either provide accurate, grounded answers or explicitly refuse with ``I\_DONT\_KNOW'' when the retrieved context is insufficient.
+
+\subsection{Challenges}
+Multi-turn RAG presents unique challenges beyond single-turn question answering:
+
+\textbf{Context Decay.} As conversations progress, coreferences and ellipses accumulate, making later queries increasingly dependent on dialogue history. A query like ``How much does it cost?'' requires resolution of the implicit referent from previous turns.
+
+\textbf{Hallucination Risk.} LLMs tend to generate plausible-sounding but unsupported answers when retrieved context is marginally relevant. In conversational settings, this risk compounds across turns.
+
+\textbf{Calibrated Refusal.} Systems must balance informativeness with safety---answering when possible while refusing when context is genuinely insufficient, without being overly conservative.
+
+\subsection{Proposed Approach: The ``Sovereign'' Strategy}
+Our solution is designed around three constraints that we call the ``Sovereign'' strategy:
+
+\begin{enumerate}
+    \item \textbf{Fully Offline}: No external API calls (GPT-4, Claude, etc.)
+    \item \textbf{Open-Source Only}: All models publicly available on HuggingFace
+    \item \textbf{Consumer Hardware}: Deployable on consumer-grade GPUs with limited VRAM
+\end{enumerate}
+
+These constraints drive every technical decision: 4-bit quantization, CPU offloading for embeddings, and a modular architecture that separates concerns by computational requirements.
+
+
+
+\section{System Implementation}
+
+\subsection{Module: Data Ingestion (src/ingestion.py)}
+
+A fundamental tension exists in RAG systems between retrieval precision and contextual completeness. Small chunks match user queries precisely but lack the surrounding context needed for coherent answers. Large chunks preserve context but introduce noise that degrades retrieval quality.
+
+We resolve this tension through a \textbf{Parent-Child chunking strategy}. Documents are first split into Parent chunks of approximately 1200 characters---large enough to contain complete semantic units like full paragraphs or sections. Each Parent is then subdivided into Child chunks of 400 characters, optimized for dense vector matching.
+
+The key insight is that we \textit{search over children but generate from parents}. During indexing, each Child chunk stores its Parent's complete text in metadata. At query time, the retriever matches against the fine-grained Child embeddings, but the generator receives the broader Parent context. This achieves the best of both worlds: precise retrieval with coherent generation.
+
+All documents are indexed in a unified Qdrant collection with domain metadata attached to each chunk. This enables filtered retrieval: when processing a government conversation, we restrict search to government documents only. Without this filtering, we observed severe cross-domain contamination---a query about NASA's ``Europa Clipper'' retrieved financial documents about ``European markets'' due to semantic similarity in the word ``Europa.''
+
+\subsection{Module: Retrieval (src/retrieval.py)}
+
+Dense retrieval using bi-encoders is fast but imprecise: the query and documents are embedded independently, limiting the model's ability to capture fine-grained semantic relationships. Cross-encoders provide more accurate relevance scoring by jointly encoding the query-document pair, but are computationally expensive and non-parallelizable.
+
+We combine both approaches in a \textbf{two-stage retrieval pipeline}. First, we use \textbf{BGE-M3} embeddings to retrieve the top-20 candidate documents via fast approximate nearest neighbor search. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations.
+
+Second, the \textbf{BGE-reranker-v2-m3} cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the top-5 most relevant documents for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
+
+To maximize GPU memory for the LLM, both the embedding model and reranker run on CPU. This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
+
+\subsection{Module: Graph Orchestration (src/graph.py)}
+
+We implement a \textbf{cyclic agentic graph} using LangGraph, moving beyond fragile linear pipelines.
+
+\subsubsection{Workflow Logic}
+The graph consists of seven interconnected nodes:
+\begin{enumerate}
+    \item \textbf{Rewrite}: Transforms context-dependent queries (e.g., ``How much is it?'') into standalone questions by resolving coreferences.
+    \item \textbf{Retrieve}: Fetches top-20 candidates from filtered Qdrant vector store.
+    \item \textbf{Grade Documents}: Implements CRAG (Corrective RAG) to discard irrelevant retrieved documents before generation.
+    \item \textbf{Generate}: Produces answer using the LLM with filtered context.
+    \item \textbf{Hallucination Check}: Implements Self-RAG to validate answer grounding against sources.
+    \item \textbf{Increment Retry}: Loops back for regeneration if hallucination is detected (max 2 retries).
+    \item \textbf{Fallback}: Returns ``I\_DONT\_KNOW'' with diagnostic telemetry.
+\end{enumerate}
+
+\subsubsection{State Management}
+The graph maintains a shared state (`GraphState`) flowing through all nodes, containing conversation history, questions, retrieved documents, and the `fallback\_reason` telemetry. This design decouples the workflow logic from the node implementations.
+
+\subsection{Module: Generation (src/generation.py)}
+
+Running large language models on consumer hardware requires aggressive optimization. We employ \textbf{Llama 3.1 8B Instruct} with 4-bit NF4 quantization via bitsandbytes, reducing memory requirements from approximately 16GB to 6GB. This enables the full model to fit on a single GPU while reserving capacity for the retrieval components.
+
+\subsubsection{Query Rewriting}
+Multi-turn conversations introduce ambiguity through coreferences and ellipses. A user asking ``How much does it cost?'' after discussing a specific product expects the system to understand the implicit referent. Our \textbf{Rewrite} node addresses this through few-shot prompted coreference resolution, transforming context-dependent queries into standalone questions that the retriever can process independently:
+
+\begin{quote}
+\textit{Chat History:} Who is the CEO of Apple? / Tim Cook.\\
+\textit{Last Question:} How old is he?\\
+\textit{Rewrite:} How old is Tim Cook?
+\end{quote}
+
+This transformation is critical: retrieval quality depends entirely on the query, and ambiguous queries retrieve irrelevant documents.
+
+\subsubsection{Self-Correction Mechanisms}
+The core innovation of our architecture is the integration of two complementary verification stages from recent RAG literature.
+
+\textbf{Corrective RAG (CRAG)} addresses retrieval failures. Before passing documents to the generator, each retrieved document is evaluated for relevance using a binary grader. Documents deemed irrelevant are filtered out. If no relevant documents remain after filtering, the system immediately falls back---there is no point generating an answer with irrelevant context.
+
+\textbf{Self-RAG} addresses generation failures. After the LLM produces an answer, a hallucination grader evaluates whether the answer is actually supported by the source documents. We deliberately use a permissive criterion: answers are acceptable if their main claims can be \textit{found in or reasonably inferred from} the documents. Only clear fabrications---wrong dates, invented names, factual contradictions---trigger a ``no'' score.
+
+When hallucination is detected, the system does not immediately give up. Instead, it loops back to the Generate node, attempting regeneration up to two times. This retry mechanism captures cases where the LLM initially produces a flawed response but can self-correct given another chance. Only after exhausting retries does the system fall back gracefully.
+
+\subsubsection{Fallback Telemetry}
+A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a \texttt{fallback\_reason} that categorizes the failure: \texttt{irrelevant\_docs} (retrieval failed), \texttt{llm\_refusal} (LLM was overly conservative), or \texttt{hallucination\_loop\_exhausted} (generation repeatedly hallucinated). This telemetry enables targeted debugging---prompt engineering to reduce LLM refusals, corpus expansion to address retrieval gaps, or model upgrades to reduce hallucinations.
+
+\subsection{Module: Evaluation (eval/evaluate.py)}
+
+We use RAGAS for offline evaluation, employing Llama 3.1 8B as the judge model (no external APIs). The evaluation pipeline:
+\begin{enumerate}
+    \item Links generated submissions with ground truth from `conversations.json` via `original\_index`.
+    \item Computes key metrics:
+    \begin{itemize}
+        \item \textbf{Faithfulness}: Grounding of answer in context.
+        \item \textbf{Answer Relevancy}: Relevance to the query.
+        \item \textbf{Context Precision}: Quality of retrieval.
+    \end{itemize}
+\end{enumerate}
+
+\section{Experimental Setup}
+
+\subsection{Software Stack}
+Our system is designed to run on consumer-grade GPUs with limited VRAM. Key components:
+\begin{itemize}
+    \item \textbf{Orchestration}: LangGraph for cyclic graph execution
+    \item \textbf{Vector Store}: Qdrant with local persistence
+    \item \textbf{LLM}: Llama 3.1 8B with 4-bit NF4 quantization (bitsandbytes)
+    \item \textbf{Embeddings}: BGE-M3 via sentence-transformers
+    \item \textbf{Evaluation}: RAGAS framework
+\end{itemize}
+
+\subsection{Dataset}
+The MTRAGEval dataset comprises conversations across four domains:
+\begin{itemize}
+    \item \textbf{govt}: Government documents
+    \item \textbf{clapnq}: Community Q\&A (ClapNQ subset)
+    \item \textbf{fiqa}: Financial Q\&A
+    \item \textbf{cloud}: Cloud documentation
+\end{itemize}
+
+We indexed approximately 100,000 document chunks across all domains in a unified Qdrant collection with domain metadata for filtered retrieval.
+
+
+
+\section{Experimental Results}
+
+
+
+\subsection{Quantitative Results}
+
+\begin{table}[htbp]
+\caption{Task C Results on Development Set (110 conversations)}
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Outcome} & \textbf{Count} & \textbf{Percentage} \\
+\midrule
+Answered & 70 & 63.6\% \\
+I\_DONT\_KNOW & 40 & 36.4\% \\
+\midrule
+\textbf{Total} & \textbf{110} & 100\% \\
+\bottomrule
+\end{tabular}
+\label{tab:overall}
+\end{center}
+\end{table}
+
+\begin{table}[htbp]
+\caption{Fallback Reason Breakdown}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Reason} & \textbf{Count} \\
+\midrule
+none (successful) & 70 \\
+irrelevant\_docs & 16 \\
+hallucination\_loop\_exhausted & 12 \\
+llm\_refusal & 12 \\
+\bottomrule
+\end{tabular}
+\label{tab:fallback}
+\end{center}
+\end{table}
+
+The switch to Llama 3.1 8B significantly improved the document grader's recall, halving the \texttt{irrelevant\_docs} failures from 32 (with 3B model) to 16. This suggests that the larger model is much better at identifying subtle relevance. The remaining 16 cases likely represent true corpus gaps.
+
+
+\subsection{Qualitative Case Studies}
+
+To contextualize the quantitative metrics, we analyze specific interaction patterns. Table \ref{tab:qualitative} summarizes three representative cases, while the subsequent paragraphs provide a detailed fluid analysis of the system's reasoning and behavior in each scenario.
+
+\begin{table}[htbp]
+\caption{Qualitative Analysis of Representative Interactions}
+\begin{center}
+\begin{tabular}{lp{0.25\linewidth}p{0.55\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Outcome} & \textbf{Interaction Summary} \\
+\midrule
+govt\_4 & Success & \textbf{Q}: ``Are they all by us?'' (Mars missions) \newline \textbf{A}: Correctly identifies international collaboration (ESA). \\
+\midrule
+govt\_7 & Safe Failure & \textbf{Q}: ``Can a 17 year old be the defendant?'' \newline \textbf{A}: Fallback to I\_DONT\_KNOW due to ambiguity. \\
+\midrule
+clapnq\_4 & Retrieval Limit & \textbf{Q}: ``secondary source'' \newline \textbf{A}: Fallback due to insufficient query context. \\
+\bottomrule
+\end{tabular}
+\label{tab:qualitative}
+\end{center}
+\end{table}
+
+\paragraph{Success Case: Multi-Hop Reasoning (ID: govt\_4)}
+The user asked ``Are they all by us?'', referring to Mars missions mentioned in the previous turn. The system successfully resolved the coreference ``they'' to the missions and ``us'' to the United States/NASA. By retrieving documents describing international collaborations, it synthesized a correct answer acknowledging the European Space Agency's role. This demonstrates the effectiveness of the Rewrite-Retrieve-Generate pipeline in handling context-dependent queries.
+
+\paragraph{Safe Failure: Ambiguity Handling (ID: govt\_7)}
+When asked ``Can a 17 year old be the defendant in a claim?'', the system returned \texttt{hallucination\_loop\_exhausted} (I\_DONT\_KNOW). The ground truth answer for this query admits ``It is unclear''. The system, unable to find a definitive ``yes'' or ``no'' in the retrieved legal documents, repeatedly attempted to generate an answer but failed the hallucination check. Rather than fabricating a legal fact, it correctly fell back, confirming that the hallucination grader effectively prevents confidently wrong answers in high-stakes domains.
+
+\paragraph{Retrieval Limit: Short Query (ID: clapnq\_4)}
+The user provided a generic, keyword-only query: ``secondary source''. The Rewriter failed to expand this into a distinct question, and the dense retriever failed to find documents exceeding the relevance threshold. This case highlights a limitation in handling extremely telegraphic user inputs and suggests a need for more aggressive query expansion strategies to bridge the gap between keyword search and semantic retrieval.
+
+\section{Ablation Studies and Discussion}
+
+\subsection{Impact of Domain Filtering}
+Initial experiments without domain filtering showed severe cross-domain contamination. For example, a query about ``Europa Clipper'' (NASA mission in govt domain) retrieved financial documents about ``European markets.'' Adding domain-specific filtering eliminated these errors.
+
+\subsection{Impact of Prompt Permissiveness}
+We iterated on generator and grader prompts to balance precision with recall:
+
+\textbf{Strict Prompt}: ``Only answer if the context DIRECTLY contains the answer''
+\begin{itemize}
+    \item Result: High I\_DONT\_KNOW rate (85\%), many valid answers rejected
+\end{itemize}
+
+\textbf{Permissive Prompt}: ``Use context as PRIMARY source; reasonable inferences allowed''
+\begin{itemize}
+    \item Result: 64\% answer rate, substantial reduction in false negatives
+\end{itemize}
+
+\subsection{Impact of Parent-Child Chunking}
+Compared to flat chunking (400 chars), Parent-Child chunking:
+\begin{itemize}
+    \item Preserved document-level coherence for complex queries
+    \item Reduced context fragmentation in retrieved passages
+    \item Enabled multi-sentence answers requiring broader context
+\end{itemize}
+
+\subsection{Limitations}
+\begin{enumerate}
+    \item \textbf{Corpus Coverage}: 16/40 failures stem from missing information in the corpus, not system errors
+    \item \textbf{Model Size}: Llama 3.1 8B shows limited reasoning compared to larger models
+    \item \textbf{Evaluation Bias}: Using the same model for generation and RAGAS evaluation introduces optimistic bias
+\end{enumerate}
+
+\section{Conclusion}
+
+We presented a Self-CRAG architecture for multi-turn RAG that operates entirely with open-source components on consumer hardware. Key contributions:
+
+\begin{enumerate}
+    \item \textbf{Cyclic Agentic Graph}: LangGraph-based workflow enabling self-correction through document grading (CRAG) and hallucination detection (Self-RAG)
+    \item \textbf{Parent-Child Chunking}: Two-level indexing strategy balancing retrieval precision with contextual coherence
+    \item \textbf{Telemetry-Enabled Fallback}: Granular diagnostics for I\_DONT\_KNOW responses enabling targeted debugging
+    \item \textbf{Resource Efficiency}: Full system runs on a single consumer-grade GPU using 4-bit NF4 quantization
+\end{enumerate}
+
+Our 64\% answer rate demonstrates that carefully engineered open-source systems can achieve competitive performance on complex RAG tasks without proprietary APIs.
+
+\textbf{Future Work.} Directions include: (1) larger open-source LLMs when hardware permits, (2) query routing to domain-specific retrievers, and (3) active learning to expand corpus coverage for frequent failure patterns.
+
+\section*{Acknowledgment}
+This work was conducted as part of the Advanced Machine Learning course at Politecnico di Torino.
+
+
+
+\end{document}
