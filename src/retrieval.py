@@ -7,8 +7,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
-from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CrossEncoderReranker
 
 
 # Configuration - CPU for embeddings/reranker to save GPU for LLM
@@ -57,23 +57,22 @@ def _get_cross_encoder() -> HuggingFaceCrossEncoder:
 
 def get_retriever(qdrant_path: str = "./qdrant_db", collection_name: str = "mtrag_collection",
                   top_k_retrieve: int = 20, top_k_rerank: int = 5, 
-                  domain: str = None, use_filter: bool = True) -> ContextualCompressionRetriever:
+                  domain: str = None) -> ContextualCompressionRetriever:
     """
     Dense Vector Search -> Cross-Encoder Rerank pipeline.
     Retrieves top_k_retrieve candidates, reranks to top_k_rerank.
-    If domain is specified and use_filter is True, filters results to that domain only.
-    Uses metadata.source (set during ingestion) instead of metadata.domain.
+    If domain is specified, filters results to that domain only.
     """
     client = get_qdrant_client(qdrant_path)
     embedding_model = _get_embedding_model()
     
     vectorstore = QdrantVectorStore(client=client, collection_name=collection_name, embedding=embedding_model)
     
-    # Apply domain filter using metadata.source (from ingestion)
+    # Apply domain filter if specified
     search_kwargs = {"k": top_k_retrieve}
-    if domain and use_filter:
+    if domain:
         search_kwargs["filter"] = Filter(
-            must=[FieldCondition(key="metadata.source", match=MatchValue(value=domain))]
+            must=[FieldCondition(key="metadata.domain", match=MatchValue(value=domain))]
         )
     
     base_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)

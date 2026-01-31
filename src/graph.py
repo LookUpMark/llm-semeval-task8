@@ -53,24 +53,22 @@ def _get_components():
     return _components
 
 
-def _get_retriever_for_domain(domain: str, use_filter: bool = True):
-    """Returns retriever filtered by domain. Cached per-domain and filter setting."""
+def _get_retriever_for_domain(domain: str):
+    """Returns retriever filtered by domain. Cached per-domain."""
     global _retriever
     if _retriever is None:
         _retriever = {}
     
-    cache_key = f"{domain}_{use_filter}"
-    if cache_key not in _retriever:
-        print(f"Initializing retriever for domain: {domain}, use_filter: {use_filter}")
-        _retriever[cache_key] = get_retriever(
+    if domain not in _retriever:
+        print(f"Initializing retriever for domain: {domain}")
+        _retriever[domain] = get_retriever(
             qdrant_path=QDRANT_PATH, 
             collection_name="mtrag_unified", 
             top_k_retrieve=20, 
             top_k_rerank=5,
-            domain=domain,
-            use_filter=use_filter
+            domain=domain
         )
-    return _retriever[cache_key]
+    return _retriever[domain]
 
 
 # ============================================================================
@@ -95,34 +93,15 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
 
 
 def retrieve_node(state: GraphState) -> Dict[str, Any]:
-    """Searches Qdrant for relevant documents with fallback to unfiltered search."""
-    standalone_q = state.get("standalone_question") or state.get("question", "")
-    original_q = state.get("question", "")
+    """Searches Qdrant for relevant documents."""
+    question = state.get("standalone_question") or state.get("question", "")
     domain = state.get("domain", "govt")
     
-    documents = []
-    
-    # Try filtered retrieval first
     try:
-        documents = _get_retriever_for_domain(domain, use_filter=True).invoke(standalone_q)
+        documents = _get_retriever_for_domain(domain).invoke(question)
     except Exception as e:
-        print(f"Filtered retrieval failed: {e}")
-    
-    # Fallback 1: if no docs, try with original question (filtered)
-    if not documents and original_q != standalone_q:
-        try:
-            print("Fallback: trying original question with filter")
-            documents = _get_retriever_for_domain(domain, use_filter=True).invoke(original_q)
-        except Exception as e:
-            print(f"Original question retrieval failed: {e}")
-    
-    # Fallback 2: if still no docs, try without domain filter
-    if not documents:
-        try:
-            print("Fallback: trying without domain filter")
-            documents = _get_retriever_for_domain(domain, use_filter=False).invoke(standalone_q)
-        except Exception as e:
-            print(f"Unfiltered retrieval failed: {e}")
+        print(f"Retrieval failed: {e}")
+        documents = []
         
     return {"documents": documents, "retry_count": 0}
 
