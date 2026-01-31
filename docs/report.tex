@@ -16,9 +16,9 @@
 \title{Gbgers at SemEval 2026 Task 8:\\A Resource-Constrained Self-CRAG Architecture for Multi-Turn RAG using Open-Source LLMs}
 
 \author{
-\IEEEauthorblockN{Marc'Antonio Lopez\IEEEauthorrefmark{1}, [Author 2]\IEEEauthorrefmark{1}, [Author 3]\IEEEauthorrefmark{1}, [Author 4]\IEEEauthorrefmark{1}, [Author 5]\IEEEauthorrefmark{1}}
+\IEEEauthorblockN{Marc'Antonio Lopez\IEEEauthorrefmark{1}, Filippo Simone Iannello\IEEEauthorrefmark{1}, [Author 3]\IEEEauthorrefmark{1}, [Author 4]\IEEEauthorrefmark{1}, [Author 5]\IEEEauthorrefmark{1}}
 \IEEEauthorblockA{\IEEEauthorrefmark{1}\textit{Department of Control and Computer Engineering, Politecnico di Torino}, Torino, Italy\\
-\{s336362, sXXXXXX, sXXXXXX, sXXXXXX, sXXXXXX\}@studenti.polito.it}
+\{s336362, s345220, sXXXXXX, sXXXXXX, sXXXXXX\}@studenti.polito.it}
 }
 
 \maketitle
@@ -88,7 +88,7 @@ We implement a \textbf{cyclic agentic graph} using LangGraph, moving beyond frag
 The graph consists of seven interconnected nodes:
 \begin{enumerate}
     \item \textbf{Rewrite}: Transforms context-dependent queries (e.g., ``How much is it?'') into standalone questions by resolving coreferences.
-    \item \textbf{Retrieve}: Fetches top-20 candidates from filtered Qdrant vector store.
+    \item \textbf{Retrieve}: Fetches top-20 candidates from domain-filtered Qdrant vector store, then reranks to top-5 using cross-encoder scoring.
     \item \textbf{Grade Documents}: Implements CRAG (Corrective RAG) to discard irrelevant retrieved documents before generation.
     \item \textbf{Generate}: Produces answer using the LLM with filtered context.
     \item \textbf{Hallucination Check}: Implements Self-RAG to validate answer grounding against sources.
@@ -96,8 +96,10 @@ The graph consists of seven interconnected nodes:
     \item \textbf{Fallback}: Returns ``I\_DONT\_KNOW'' with diagnostic telemetry.
 \end{enumerate}
 
+The graph's cyclic nature emerges from intelligent routing decisions that distinguish between recoverable and terminal failures. After document grading, the system evaluates whether the retrieved context is sufficient: if relevant documents exist, processing continues to generation; if all documents are deemed irrelevant, the system immediately routes to fallback---there is no value in attempting generation without grounding. Similarly, after generating an answer, the hallucination checker determines the next action: grounded answers proceed to completion, while hallucinated responses trigger a retry loop that gives the model another opportunity to self-correct. Only after exhausting two regeneration attempts does the system concede defeat and return a diagnostic refusal.
+
 \subsubsection{State Management}
-The graph maintains a shared state (`GraphState`) flowing through all nodes, containing conversation history, questions, retrieved documents, and the `fallback\_reason` telemetry. This design decouples the workflow logic from the node implementations.
+The graph maintains a shared state object flowing through all nodes, capturing the complete trajectory of each query through the pipeline. This state accumulates not only the user's original question and the full conversation history, but also intermediate artifacts generated at each stage: the standalone reformulated query from the rewrite step, the retrieved documents and their relevance assessments, the generated answer, hallucination detection results, and a running retry counter. Most critically, the state tracks a diagnostic reason code that categorizes why the system chose to return I\_DONT\_KNOW rather than an answer. This stateful architecture decouples workflow orchestration from node implementations---each node receives the current state, performs its specialized function, and returns incremental updates that propagate forward through the graph.
 
 \subsection{Module: Generation (src/generation.py)}
 
@@ -124,7 +126,7 @@ The core innovation of our architecture is the integration of two complementary 
 When hallucination is detected, the system does not immediately give up. Instead, it loops back to the Generate node, attempting regeneration up to two times. This retry mechanism captures cases where the LLM initially produces a flawed response but can self-correct given another chance. Only after exhausting retries does the system fall back gracefully.
 
 \subsubsection{Fallback Telemetry}
-A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a \texttt{fallback\_reason} that categorizes the failure: \texttt{irrelevant\_docs} (retrieval failed), \texttt{llm\_refusal} (LLM was overly conservative), or \texttt{hallucination\_loop\_exhausted} (generation repeatedly hallucinated). This telemetry enables targeted debugging---prompt engineering to reduce LLM refusals, corpus expansion to address retrieval gaps, or model upgrades to reduce hallucinations.
+A key design decision is making failures \textit{observable}. Every I\_DONT\_KNOW response includes a diagnostic reason that categorizes the failure mode. The system distinguishes between six distinct scenarios: retrieval returning zero candidates from the vector store, all retrieved documents failing the relevance grading threshold, the generator explicitly choosing to refuse rather than risk an incorrect answer, technical failures during LLM inference, and---most interestingly---cases where the model generates plausible-sounding answers that fail hallucination checks even after multiple regeneration attempts. This granular telemetry transforms opaque refusals into actionable debugging signals. A prevalence of relevance grading failures suggests the need for corpus expansion or better chunking strategies; frequent LLM refusals indicate overly conservative prompting that should be relaxed; repeated hallucination loop exhaustion points to fundamental model limitations that might require upgrading to a larger or better-tuned variant.
 
 \subsection{Module: Evaluation (eval/evaluate.py)}
 
