@@ -109,16 +109,16 @@ Last Question: {question}<|eot_id|>
 
 
 def _create_generator(llm) -> Any:
-    """Creates the RAG generator chain with balanced I_DONT_KNOW fallback."""
+    """Creates the RAG generator chain with conservative I_DONT_KNOW fallback."""
     template = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 You are a helpful assistant for a RAG task.
-Answer the user's question based on the context provided below.
+Answer the user's question based ONLY on the context provided below.
 
 GUIDELINES:
-1. Use the context as your PRIMARY source of information.
-2. You MAY make reasonable inferences from the context if the answer is implied.
+1. Your answer MUST be directly supported by the context.
+2. For facts (names, dates, numbers), only include them if they appear in the context.
 3. Keep your answer concise and relevant to the question.
-4. If the context contains related information, use it to form an answer.
+4. If the context does not contain enough information to answer the question, respond with I_DONT_KNOW.
 
 ### EXAMPLES
 Context: The sky is blue during the day. At sunset, it turns orange and red.
@@ -136,11 +136,15 @@ Answer: I_DONT_KNOW
 Context: Electric cars use batteries instead of gasoline engines.
 Question: How do electric cars work?
 Answer: Electric cars work by using batteries instead of traditional gasoline engines.
+
+Context: The company reported revenue of $50 million.
+Question: What was the company's profit?
+Answer: I_DONT_KNOW
 ### END EXAMPLES
 
 SAFETY RULE:
-Only respond with "I_DONT_KNOW" if the context is completely unrelated to the question.
-If the context contains ANY relevant information, use it to answer.
+Respond with "I_DONT_KNOW" if the context does not directly support the answer.
+Do NOT guess or invent facts not present in the context.
 
 CONTEXT:
 {context}<|eot_id|>
@@ -190,15 +194,15 @@ Document: {document}<|eot_id|>
 def _create_hallucination_grader(llm) -> Any:
     """Creates the hallucination grader (Self-RAG component)."""
     template = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a grader assessing whether an LLM answer is reasonably supported by the provided documents.
+You are a strict grader assessing whether an LLM answer is supported by the provided documents.
 Give a binary score 'yes' or 'no'.
 
 GRADING CRITERIA:
-- 'yes' = The answer's main claims can be found in OR reasonably inferred from the documents.
-- 'no' = The answer contains significant claims that directly contradict the documents OR are completely fabricated.
+- 'yes' = The answer's key facts (names, dates, numbers, events) are explicitly present in the documents.
+- 'no' = The answer contains facts NOT found in the documents, even if they seem plausible.
 
-BE PERMISSIVE: Minor elaborations, paraphrasing, and reasonable inferences are acceptable.
-Only mark 'no' for clear hallucinations (fabricated facts, wrong dates, invented names).
+BE STRICT: Only accept answers where key claims are directly supported.
+Mark 'no' for any fabricated details, unsupported claims, or invented specifics.
 
 ### EXAMPLES
 Documents: Apple was founded in 1976 by Steve Jobs, Steve Wozniak, and Ronald Wayne in California.
@@ -213,9 +217,17 @@ Documents: Electric cars use batteries to power electric motors.
 Answer: Electric vehicles run on battery-powered electric motors instead of gasoline engines.
 Output: {{"binary_score": "yes"}}
 
+Documents: The company reported strong growth.
+Answer: The company's revenue grew by 25% last year.
+Output: {{"binary_score": "no"}}
+
 Documents: The Freedmen's Bureau helped formerly enslaved people after the Civil War.
-Answer: The Bureau assisted freed slaves with education, employment, and legal matters.
+Answer: The Bureau provided education and employment assistance.
 Output: {{"binary_score": "yes"}}
+
+Documents: Paris is the capital of France.
+Answer: Paris is the capital of France with a population of 2.1 million.
+Output: {{"binary_score": "no"}}
 ### END EXAMPLES
 
 Respond EXCLUSIVELY with a JSON object with key "binary_score".<|eot_id|>
