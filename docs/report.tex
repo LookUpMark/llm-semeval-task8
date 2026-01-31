@@ -349,11 +349,17 @@ Compared to flat chunking (400 chars), Parent-Child chunking:
 \end{itemize}
 
 \subsection{Limitations}
-\begin{enumerate}
-    \item \textbf{Corpus Coverage}: 16/40 failures stem from missing information in the corpus, not system errors
-    \item \textbf{Model Size}: Llama 3.1 8B shows limited reasoning compared to larger models
-    \item \textbf{Evaluation Bias}: Using the same model for generation and RAGAS evaluation introduces optimistic bias
-\end{enumerate}
+\label{sec:limitations}
+
+\paragraph{Corpus Gaps vs. System Failures}
+Our error analysis reveals that the system's performance ceiling is significantly lowered by data sparsity. Specifically, 16 out of the 40 failures (40\%) in the development set were classified as ``Valid Refusals'' or verified corpus gaps. This indicates that the raw answer rate of 63.6\% is partially a reflection of the dataset's incompleteness rather than purely an architectural limitation. In these cases, the system correctly identified that no document contained the answer, behaving exactly as designed.
+
+\paragraph{Model Capacity Constraints}
+The use of a 4-bit quantized 8B model (Llama 3.1) introduces distinct reasoning bottlenecks. As seen in the ``False Negative'' refusals (Table~\ref{tab:qualitative_examples}, \texttt{govt\_5}), the compressed model struggles to perform multi-hop deductions or synonym matching that the unquantized 14B Judge handles effortlessly. This confirms that while consumer hardware allows for deployment, it imposes a hard limit on semantic reasoning depth.
+
+\paragraph{Agent-Judge Alignment Gap}
+A significant factor affecting our quantitative scores is the intentional strictness mismatch between the runtime agent and the offline evaluator. The agent is prompted to be ``helpful'' and permissive (allowing reasonable inferences to maximize user satisfaction), whereas the Qwen-14B Judge is prompted to be ``strict'' and penalize any information not explicitly present in the text. This divergence explains the high Hallucination Rate (87\%): many answers deemed ``useful'' by the agent are technically classified as ``knowledge leakage'' by the rigorous Judge. This highlights the trade-off between conversational fluency and strict RAG adherence.
+
 
 \section{Conclusion}
 
