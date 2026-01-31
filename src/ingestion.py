@@ -1,18 +1,22 @@
-"""Data Ingestion with Parent-Child Chunking for MTRAGEval."""
+"""Data Ingestion with Parent-Child Chunking."""
 
 import json
 import uuid
 from typing import List, Optional
 from pathlib import Path
+
 from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client.models import Distance, VectorParams
 from langchain_huggingface import HuggingFaceEmbeddings
-from src.retrieval import get_qdrant_client
 
-EMBEDDING_MODEL_NAME = "BAAI/bge-m3"  # SOTA for dense retrieval
+from .retrieval import get_qdrant_client
+
+
+# Configuration
+EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 _embedding_model: Optional[HuggingFaceEmbeddings] = None
 
 
@@ -32,7 +36,6 @@ def load_and_chunk_data(json_path: str) -> List[Document]:
     """Load JSONL corpus and apply Parent-Child chunking (1200/400 chars)."""
     print(f"--- LOADING DATA FROM {json_path} ---")
     
-    # Load JSONL file
     data = []
     try:
         with open(json_path, "r", encoding="utf-8") as f:
@@ -42,7 +45,6 @@ def load_and_chunk_data(json_path: str) -> List[Document]:
     except FileNotFoundError:
         raise FileNotFoundError(f"File {json_path} not found.")
     
-    # Convert to Documents
     raw_docs = []
     source_name = Path(json_path).stem
     for item in data:
@@ -69,7 +71,7 @@ def load_and_chunk_data(json_path: str) -> List[Document]:
         for p_chunk in parent_splitter.split_documents([parent_doc]):
             parent_id = str(uuid.uuid4())
             for c_chunk in child_splitter.split_documents([p_chunk]):
-                # Store parent content in child metadata for context retrieval
+                # Store parent content in child metadata
                 c_chunk.metadata.update({
                     "parent_text": p_chunk.page_content,
                     "parent_title": parent_doc.metadata["title"],
@@ -83,13 +85,13 @@ def load_and_chunk_data(json_path: str) -> List[Document]:
 
 def build_vector_store(docs: List[Document], persist_dir: str = "../qdrant_db", 
                        collection_name: str = "mtrag_collection") -> QdrantVectorStore:
-    """Create and persist Qdrant vector store with embedded documents."""
+    """Create and persist Qdrant vector store."""
     print(f"--- BUILDING VECTOR STORE: {collection_name} ---")
     
     embedding_model = _get_embedding_model()
     client = get_qdrant_client(persist_dir)
     
-    # Get embedding dimension and recreate collection
+    # Recreate collection
     embedding_dim = len(embedding_model.embed_query("test"))
     client.recreate_collection(
         collection_name=collection_name,

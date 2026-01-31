@@ -1,13 +1,15 @@
-"""Hybrid Retrieval with Cross-Encoder Reranking for MTRAGEval."""
+"""Hybrid Retrieval with Cross-Encoder Reranking."""
 
 from typing import List, Any, Optional
+
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_classic.retrievers import ContextualCompressionRetriever
-from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+
 
 # Configuration - CPU for embeddings/reranker to save GPU for LLM
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
@@ -15,7 +17,7 @@ RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 EMBEDDING_DEVICE = "cpu"
 RERANKER_DEVICE = "cpu"
 
-# Singletons to avoid lock conflicts
+# Singletons
 _qdrant_client: Optional[QdrantClient] = None
 _embedding_model: Optional[HuggingFaceEmbeddings] = None
 _cross_encoder: Optional[HuggingFaceCrossEncoder] = None
@@ -57,7 +59,7 @@ def get_retriever(qdrant_path: str = "./qdrant_db", collection_name: str = "mtra
                   top_k_retrieve: int = 20, top_k_rerank: int = 5, 
                   domain: str = None) -> ContextualCompressionRetriever:
     """
-    Dense Vector Search → Cross-Encoder Rerank pipeline.
+    Dense Vector Search -> Cross-Encoder Rerank pipeline.
     Retrieves top_k_retrieve candidates, reranks to top_k_rerank.
     If domain is specified, filters results to that domain only.
     """
@@ -74,7 +76,6 @@ def get_retriever(qdrant_path: str = "./qdrant_db", collection_name: str = "mtra
         )
     
     base_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
-    
     compressor = CrossEncoderReranker(model=_get_cross_encoder(), top_n=top_k_rerank)
     
     return ContextualCompressionRetriever(base_retriever=base_retriever, base_compressor=compressor)
@@ -84,9 +85,11 @@ def format_docs_for_gen(docs: List[Any]) -> str:
     """Extract deduplicated parent texts from retrieved child chunks."""
     unique_contents = set()
     final_context = []
+    
     for doc in docs:
         parent_text = doc.metadata.get("parent_text", doc.page_content)
         if parent_text not in unique_contents:
             unique_contents.add(parent_text)
             final_context.append(parent_text)
+            
     return "\n\n".join(final_context)
