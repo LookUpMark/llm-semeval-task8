@@ -64,21 +64,29 @@ These constraints drive every technical decision: 4-bit quantization, CPU offloa
 
 A fundamental tension exists in RAG systems between retrieval precision and contextual completeness. Small chunks match user queries precisely but lack the surrounding context needed for coherent answers. Large chunks preserve context but introduce noise that degrades retrieval quality.
 
-We resolve this tension through a \textbf{Parent-Child chunking strategy}. Documents are first split into Parent chunks of approximately 1200 characters---large enough to contain complete semantic units like full paragraphs or sections. Each Parent is then subdivided into Child chunks of 400 characters, optimized for dense vector matching.
+We resolve this tension through a \textbf{Parent-Child chunking strategy} implemented via LangChain's \texttt{RecursiveCharacterTextSplitter}. Documents are first split into Parent chunks of \textbf{1200 characters with 100-character overlap}---large enough to contain complete semantic units like full paragraphs or sections while ensuring continuity across chunk boundaries. Each Parent is then subdivided into Child chunks of \textbf{400 characters with 50-character overlap}, optimized for dense vector matching.
 
-The key insight is that we \textit{search over children but generate from parents}. During indexing, each Child chunk stores its Parent's complete text in metadata. At query time, the retriever matches against the fine-grained Child embeddings, but the generator receives the broader Parent context. This achieves the best of both worlds: precise retrieval with coherent generation.
+The key insight is that we \textit{search over children but generate from parents}. During indexing, each Child chunk stores rich metadata linking it to its parent: \texttt{parent\_text} (the full parent content), \texttt{parent\_title}, \texttt{parent\_url}, and a unique \texttt{parent\_id} (UUID). At query time, the retriever matches against the fine-grained Child embeddings, but the generator receives the broader Parent context extracted from metadata. This achieves the best of both worlds: precise retrieval with coherent generation.
 
-All documents are indexed in a unified Qdrant collection with domain metadata attached to each chunk. This enables filtered retrieval: when processing a government conversation, we restrict search to government documents only. Without this filtering, we observed severe cross-domain contamination---a query about NASA's ``Europa Clipper'' retrieved financial documents about ``European markets'' due to semantic similarity in the word ``Europa.''
+Embeddings are generated using \textbf{BGE-M3} with L2 normalization enabled (\texttt{normalize\_embeddings=True}) and batch size of 16 for memory efficiency. The embedding model runs on CPU to reserve GPU memory for the LLM. All vectors are indexed in Qdrant using \textbf{cosine similarity} as the distance metric.
+
+All documents are indexed in a unified Qdrant collection (\texttt{mtrag\_unified}) with domain metadata attached to each chunk. This enables filtered retrieval: when processing a government conversation, we restrict search to government documents only. Without this filtering, we observed severe cross-domain contamination---a query about NASA's ``Europa Clipper'' retrieved financial documents about ``European markets'' due to semantic similarity in the word ``Europa.'' Indexing is performed in batches of 64 documents for throughput optimization.
 
 \subsection{Module: Retrieval (src/retrieval.py)}
 
 Dense retrieval using bi-encoders is fast but imprecise: the query and documents are embedded independently, limiting the model's ability to capture fine-grained semantic relationships. Cross-encoders provide more accurate relevance scoring by jointly encoding the query-document pair, but are computationally expensive and non-parallelizable.
 
-We combine both approaches in a \textbf{two-stage retrieval pipeline}. First, we use \textbf{BGE-M3} embeddings to retrieve the top-20 candidate documents via fast approximate nearest neighbor search. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations.
+We combine both approaches in a \textbf{two-stage retrieval pipeline} wrapped in LangChain's \texttt{ContextualCompressionRetriever}. First, we use \textbf{BGE-M3} (\texttt{BAAI/bge-m3}) embeddings to retrieve the \textbf{top-20 candidate documents} via fast approximate nearest neighbor search against Qdrant. BGE-M3 was selected for its state-of-the-art performance on multilingual retrieval benchmarks and its efficient 1024-dimensional representations with L2 normalization.
 
-Second, the \textbf{BGE-reranker-v2-m3} cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the top-5 most relevant documents for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
+Second, the \textbf{BGE-reranker-v2-m3} (\texttt{BAAI/bge-reranker-v2-m3}) cross-encoder rescores these 20 candidates by jointly encoding each query-document pair, selecting the \textbf{top-5 most relevant documents} for generation. This two-stage approach captures the speed benefits of bi-encoders while achieving the accuracy of cross-encoders for the final selection.
 
-To maximize GPU memory for the LLM, both the embedding model and reranker run on CPU. This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
+\subsubsection{Domain Filtering}
+To prevent cross-domain contamination, the retriever applies a \textbf{Qdrant metadata filter} when a domain is specified. The filter uses a \texttt{FieldCondition} on \texttt{metadata.domain} with exact match semantics, ensuring that only documents from the target corpus are considered. This isolation is critical for multi-domain RAG systems.
+
+\subsubsection{Parent-Text Deduplication}
+Since multiple Child chunks may share the same Parent, the \texttt{format\_docs\_for\_gen()} function extracts unique parent texts from retrieved documents, preventing redundant context from inflating the prompt. This deduplication uses a set-based approach to guarantee each parent appears only once in the final context.
+
+To maximize GPU memory for the LLM, both the embedding model and reranker run on \textbf{CPU} (configured via \texttt{device='cpu'}). This architectural decision trades retrieval latency for generation capacity---a worthwhile tradeoff given that generation quality is the primary bottleneck for answer accuracy.
 
 \subsection{Module: Graph Orchestration (src/graph.py)}
 
