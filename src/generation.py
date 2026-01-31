@@ -231,7 +231,7 @@ Output: {{"binary_score": "no"}}
 ### END EXAMPLES
 
 Respond EXCLUSIVELY with a JSON object with key "binary_score".<|eot_id|>
-<|start_header_id|>user<|end_header_id|}
+<|start_header_id|>user<|end_header_id|>
 Documents: {documents}
 Answer: {generation}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>"""
