@@ -5,7 +5,17 @@
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Status](https://img.shields.io/badge/Status-University_Project-purple.svg)
 
+## Project Overview
+
 This repository contains the implementation of a Self-Corrective Retrieval-Augmented Generation (Self-CRAG) system designed for the SemEval 2026 Task 8 challenge (Multi-Turn Retrieval-Augmented Generation). The project demonstrates a production-grade approach to complex question answering using local Large Language Models (LLMs) and advanced retrieval strategies.
+
+### The "Sovereign" Strategy
+Our solution is designed around three strict constraints:
+1.  **Fully Offline**: No external API calls (e.g., GPT-4, Claude).
+2.  **Open-Source Only**: All models are publicly available on HuggingFace.
+3.  **Consumer Hardware**: Deployable on consumer-grade GPUs (e.g., NVIDIA T4) with limited VRAM.
+
+These constraints drive every technical decision, including 4-bit quantization and CPU offloading for embeddings.
 
 ## Team Members
 
@@ -67,61 +77,42 @@ The codebase is organized as follows:
 └── requirements.txt        # Python dependencies
 ```
 
-## Getting Started
+## Results
 
-### Prerequisites
+The system's performance was evaluated across three key tasks: Retrieval (Task A), Generation (Task B), and Multi-Turn RAG (Task C).
 
-*   Python 3.12 or higher
-*   NVIDIA GPU with at least 15GB VRAM (for 4-bit quantization)
-*   CUDA Toolkit 12.x
 
-### Installation
 
-1.  **Clone the Repository**
-    ```bash
-    git clone https://github.com/yourusername/llm-semeval-task8.git
-    cd llm-semeval-task8
-    ```
+### Task C: RAG Performance (Self-CRAG)
+Results on the Development Set (110 conversations), evaluated using the offline judge protocol.
 
-2.  **Set Up Virtual Environment**
-    It is recommended to use a virtual environment to manage dependencies.
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
-    ```
+**Overall Outcome:**
+| Outcome | Count | Percentage |
+| :--- | :---: | :---: |
+| **Answered** | 70 | **63.6%** |
+| **I_DONT_KNOW** | 40 | **36.4%** |
+| **Total** | 110 | 100% |
 
-3.  **Install Dependencies**
-    ```bash
-    pip install -r requirements.txt
-    ```
+**Fallback Analysis:**
+| Reason | Count | Description |
+| :--- | :---: | :--- |
+| **irrelevant_docs** | 16 | All retrieved documents failed the relevance grader. |
+| **hallucination_loop** | 12 | Generated answers failed grounding checks after retries. |
+| **llm_refusal** | 12 | The LLM explicitly declined to answer. |
 
-## Usage
+**Judge Assessment:**
+*   **Hallucination Rate**: ~87% (High strictness mismatch between agent and judge).
+*   **Refusal Validation**: ~40% of refusals were confirmed as valid data gaps (Context Missing), while others were false negatives (Agent too conservative).
 
-The project is designed to be executed via a centralized Jupyter Notebook which handles the end-to-end workflow.
+### Hardware Impact & Limitations
+The reported performance is directly influenced by the strict **hardware constraints** imposed by the evaluation environment (Single T4 GPU).
+*   **Quantization Effects**: The use of **4-bit NF4 quantization** for Llama 3.1 8B introduces reasoning bottlenecks, particularly in multi-hop deduction and synonym matching, contributing to false negative refusals.
+*   **Model Capacity**: The 8B parameter limit restricts the model's ability to maintain long-context coherence compared to larger models (e.g., 70B), necessitating aggressive self-correction loops that occasionally exhaust the retry limit.
+*   **Judge vs. Agent Gap**: A significant portion of the "Hallucination" score stems from the capacity gap between the runtime agent (8B, quantized) and the offline judge (14B, unquantized), where the judge penalizes valid but simplified inferences.
 
-1.  **Launch Jupyter Lab**
-    ```bash
-    jupyter lab
-    ```
+---
 
-2.  **Open the Main Pipeline**
-    Navigate to `notebooks/All_Tasks_Pipeline.ipynb`. This notebook contains cells to:
-    *   Load and ingest the corpus into Qdrant.
-    *   Initialize the RAG graph and components.
-    *   Run inference on the test dataset.
-    *   Export results to `data/`.
-
-### Verifying Components
-
-To test individual modules without running the full pipeline, execute the notebooks located in the `tests/` directory.
-
-*   **Ingestion**: `tests/verify_ingestion.ipynb` ensures that documents are indexed correctly with parent-child metadata.
-*   **Retrieval**: `tests/verify_retrieval.ipynb` validates that the retriever returns relevant context for sample queries.
-*   **Graph Logic**: `tests/verify_self_crag.ipynb` simulates various scenarios (e.g., hallucination detection) to verify the graph's routing logic.
-
-## Evaluation
-
-## Evaluation (Offline Judge)
+## Evaluation Method
 
 To rigorously validate the system without external APIs, we implemented a custom model-based evaluation framework.
 
@@ -129,13 +120,7 @@ To rigorously validate the system without external APIs, we implemented a custom
 *   **Metric**: Faithfulness and Refusal Justification (Model-Based)
 *   **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` for semantic similarity
 
-The evaluation logic is implemented in **`eval/evaluate.ipynb`** (primary source) and exposed via a CLI script:
-
-```bash
-PYTHONPATH=. .venv/bin/python eval/evaluate.py --submission data/submissions/submission_TaskC_Gbgers.jsonl
-```
-
-This pipeline specifically evaluates:
+The evaluation logic is implemented in `eval/evaluate.ipynb` and focuses on:
 1.  **Refusal Accuracy**: Whether `I_DONT_KNOW` responses are justified by context absence.
 2.  **Faithfulness**: Whether generated answers are grounded in the retrieved documents (Self-RAG style).
 
