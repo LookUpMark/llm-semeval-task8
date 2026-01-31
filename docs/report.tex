@@ -24,7 +24,7 @@
 \maketitle
 
 \begin{abstract}
-We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. On the development set, we achieve a 64\% answer rate with detailed failure attribution across four categories: irrelevant documents (16), hallucination loops (12), and LLM refusals (12). All components are fully reproducible using only open-source tools.
+We present our system for SemEval 2026 Task 8: Multi-Turn Retrieval-Augmented Generation (MTRAGEval). Our approach implements a Self-Corrective RAG (Self-CRAG) architecture using LangGraph, designed to operate entirely offline with open-source models on consumer-grade hardware. The system combines: (1) a Parent-Child chunking strategy (1200/400 characters) that balances retrieval precision with contextual coherence; (2) a two-stage hybrid retrieval pipeline using BGE-M3 embeddings with cross-encoder reranking; (3) a cyclic agentic graph implementing both CRAG (document relevance grading) and Self-RAG (hallucination detection with retry loops); and (4) Llama 3.1 8B with 4-bit NF4 quantization for efficient inference. Our telemetry-enabled fallback mechanism provides granular diagnostics for I\_DONT\_KNOW responses. To ensure rigorous benchmarking without proprietary APIs, we implemented a custom model-based evaluation framework utilizing Qwen 2.5 14B as an offline judge to assess refusal accuracy and faithfulness. On the development set, we achieve a 64\% answer rate with detailed failure attribution across four categories: irrelevant documents (16), hallucination loops (12), and LLM refusals (12). All components are fully reproducible using only open-source tools.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -189,7 +189,7 @@ Our system is designed to run on consumer-grade GPUs with limited VRAM. Key comp
     \item \textbf{Vector Store}: Qdrant with local persistence
     \item \textbf{LLM}: Llama 3.1 8B with 4-bit NF4 quantization (bitsandbytes)
     \item \textbf{Embeddings}: BGE-M3 via sentence-transformers
-    \item \textbf{Evaluation}: RAGAS framework
+    \item \textbf{Evaluation}: A custom offline pipeline leveraging \textbf{Qwen2.5-14B-Instruct} as the Judge and \textbf{all-MiniLM-L6-v2} for semantic similarity.
 \end{itemize}
 
 \subsection{Dataset}
